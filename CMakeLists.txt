@@ -81,6 +81,7 @@ target_compile_features(nes_core PUBLIC cxx_std_17)
 add_executable(emudor
     src/main.cpp
     src/app.cpp
+    src/cli.cpp
 )
 
 if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Release")
