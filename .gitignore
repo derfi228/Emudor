@@ -1,0 +1,79 @@
+# ─── Build ───────────────────────────────────────────────────────────────────
+build/
+*.cmake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+_deps/
+
+# ─── Compiled Binaries ───────────────────────────────────────────────────────
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.o
+*.obj
+
+# ─── ROM Files (Copyright!) ──────────────────────────────────────────────────
+# Нельзя распространять — не коммитить
+roms/*.nes
+roms/*.sfc
+roms/*.smc
+roms/*.z64
+roms/*.n64
+roms/*.gbc
+roms/*.gb
+roms/*.gba
+# nestest.nes — public domain test ROM, можно включить если нужно
+# roms/nestest.nes
+
+# nestest.log генерируется автоматически
+roms/nestest.log
+
+# ─── User Data ───────────────────────────────────────────────────────────────
+config.json
+covers/
+saves/
+screenshots/
+
+# ─── ImGui UI State ──────────────────────────────────────────────────────────
+imgui.ini
+
+# ─── Debug / Trace Dumps ─────────────────────────────────────────────────────
+batman_debug.txt
+batman_frames.txt
+batman_trace.txt
+nestest_out.log
+*.log
+
+# ─── Throwaway Debug Scripts (корень проекта) ────────────────────────────────
+dump_rom.py
+dump_rom2.py
+dump_rom3.py
+dump_rom4.py
+dump_rom5.py
+
+# ─── IDE / Editor ────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ─── Python Cache ────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+
+# ─── Windows Shortcuts ───────────────────────────────────────────────────────
+*.lnk
+
+# Агентские данные (создадим позже)
+agent_data/screenshots/
+agent_data/baselines/
+agent_data/logs/
+agent_data/*.db
