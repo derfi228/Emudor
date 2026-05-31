@@ -11,7 +11,6 @@ struct CliArgs {
     std::string screenshotPath;   // --screenshot
     int         screenshotEvery  = 0;      // --screenshot-every N (0 = выкл)
     bool        headless         = false;  // --headless
-    std::string inputScriptPath;  // --input-script
     std::string traceLogPath;     // --record-trace
 
     bool        printHelp        = false;  // --help / -h

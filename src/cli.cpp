@@ -16,13 +16,9 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <cstring>
 #include <fstream>
 #include <memory>
-#include <sstream>
 #include <string>
-#include <unordered_map>
-#include <vector>
 
 // ─── Парсинг командной строки ────────────────────────────────────────────────
 namespace {
@@ -83,10 +79,6 @@ CliArgs parseCli(int argc, char** argv)
         else if (flag == "--headless") {
             a.headless = true;
         }
-        else if (flag == "--input-script") {
-            const char* v = needVal("--input-script"); if (!v) return a;
-            a.inputScriptPath = v;
-        }
         else if (flag == "--record-trace") {
             const char* v = needVal("--record-trace"); if (!v) return a;
             a.traceLogPath = v;
@@ -119,15 +111,8 @@ void printCliHelp()
         "  --screenshot-every <N>  Сохранять скриншот каждые N кадров\n"
         "                          (нумеруются: name_0001.png, name_0002.png, ...)\n"
         "  --headless              Не открывать SDL2 окно и ImGui — только эмуляция\n"
-        "  --input-script <path>   Файл с записью нажатий для воспроизведения\n"
         "  --record-trace <path>   Записать лог трассировки CPU в файл\n"
         "  --help, -h              Показать эту справку\n"
-        "\n"
-        "Формат input-script: одна строка на событие\n"
-        "  <frame> <button>[+<button>...]      — установить состояние кнопок\n"
-        "  <frame> 0  или  <frame> RELEASE     — отпустить все кнопки\n"
-        "  Кнопки (case-insensitive): UP DOWN LEFT RIGHT A B X Y L R SELECT START\n"
-        "  Строки '#...' — комментарии\n"
         "\n"
         "Коды возврата:\n"
         "  0 — успех\n"
@@ -136,8 +121,7 @@ void printCliHelp()
         "\n"
         "Примеры:\n"
         "  emudor --headless --rom mario.nes --frames 600 --screenshot end.png\n"
-        "  emudor --headless --rom zelda.sfc --frames 300 \\\n"
-        "         --input-script start.txt --screenshot-every 60\n"
+        "  emudor --headless --rom zelda.sfc --frames 300 --screenshot-every 60\n"
     );
 }
 
@@ -199,100 +183,6 @@ std::string makeNumberedPath(const std::string& tpl, int frame)
     return stem + buf + ext;
 }
 
-// ─── Input-script ────────────────────────────────────────────────────────────
-// Простой формат: '<frame> <btn1>+<btn2>+...' на строке. '#' — комментарий.
-// Каждое событие устанавливает текущее состояние кнопок (persists до следующего).
-struct InputEvent {
-    int      frame;
-    uint16_t buttons;  // для NES — нижние 8 бит, для SNES — 16 бит
-};
-
-uint16_t parseButtonsForConsole(const std::string& tokenList, bool isSnes)
-{
-    if (tokenList.empty()) return 0;
-    std::string s = tokenList;
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c){ return (char)std::toupper(c); });
-
-    if (s == "0" || s == "RELEASE" || s == "NONE") return 0;
-
-    // SNES маска (биты 15..4): B Y SEL START UP DOWN LEFT RIGHT A X L R 0 0 0 0
-    static const std::unordered_map<std::string, uint16_t> snesMap = {
-        {"B",      1u << 15}, {"Y",      1u << 14},
-        {"SELECT", 1u << 13}, {"START",  1u << 12},
-        {"UP",     1u << 11}, {"DOWN",   1u << 10},
-        {"LEFT",   1u <<  9}, {"RIGHT",  1u <<  8},
-        {"A",      1u <<  7}, {"X",      1u <<  6},
-        {"L",      1u <<  5}, {"R",      1u <<  4},
-    };
-    // NES маска (биты 7..0): A B SELECT START UP DOWN LEFT RIGHT
-    static const std::unordered_map<std::string, uint16_t> nesMap = {
-        {"A",      1u << 7}, {"B",      1u << 6},
-        {"SELECT", 1u << 5}, {"START",  1u << 4},
-        {"UP",     1u << 3}, {"DOWN",   1u << 2},
-        {"LEFT",   1u << 1}, {"RIGHT",  1u << 0},
-    };
-    const auto& map = isSnes ? snesMap : nesMap;
-
-    uint16_t mask = 0;
-    std::string cur;
-    auto flush = [&]() {
-        if (cur.empty()) return;
-        auto it = map.find(cur);
-        if (it != map.end()) mask |= it->second;
-        else std::fprintf(stderr, "input-script: unknown button '%s'\n", cur.c_str());
-        cur.clear();
-    };
-    for (char c : s) {
-        if (c == '+' || c == ' ' || c == '\t') flush();
-        else cur.push_back(c);
-    }
-    flush();
-    return mask;
-}
-
-bool loadInputScript(const std::string& path, bool isSnes,
-                     std::vector<InputEvent>& out)
-{
-    std::ifstream f(path);
-    if (!f) {
-        std::fprintf(stderr, "input-script: cannot open %s\n", path.c_str());
-        return false;
-    }
-    std::string line;
-    int lineNo = 0;
-    while (std::getline(f, line)) {
-        ++lineNo;
-        // Trim leading whitespace
-        size_t a = line.find_first_not_of(" \t\r");
-        if (a == std::string::npos) continue;
-        if (line[a] == '#') continue;
-        std::string rest = line.substr(a);
-
-        // frame_number
-        std::istringstream iss(rest);
-        int frame; iss >> frame;
-        if (!iss) {
-            std::fprintf(stderr, "input-script:%d: expected frame number\n", lineNo);
-            continue;
-        }
-        std::string buttons;
-        std::getline(iss, buttons);
-        // strip
-        size_t b1 = buttons.find_first_not_of(" \t\r");
-        if (b1 != std::string::npos) buttons = buttons.substr(b1);
-        else                          buttons.clear();
-
-        InputEvent ev;
-        ev.frame   = frame;
-        ev.buttons = parseButtonsForConsole(buttons, isSnes);
-        out.push_back(ev);
-    }
-    std::sort(out.begin(), out.end(),
-              [](const InputEvent& x, const InputEvent& y){ return x.frame < y.frame; });
-    return true;
-}
-
 } // namespace
 
 // ─── Headless-прогонка ───────────────────────────────────────────────────────
@@ -347,17 +237,6 @@ int runHeadless(const CliArgs& args)
         IMG_Quit(); SDL_Quit();
         return 1;
     }
-    const bool isSnes = (con->getConsoleName() == "SNES");
-
-    // ── Input-script (опционально) ───────────────────────────────────────────
-    std::vector<InputEvent> events;
-    if (!args.inputScriptPath.empty()) {
-        if (!loadInputScript(args.inputScriptPath, isSnes, events)) {
-            // не падаем — продолжаем без ввода
-        }
-    }
-    size_t evIdx = 0;
-
     // ── Trace log (опционально) ──────────────────────────────────────────────
     std::ofstream traceOut;
     if (!args.traceLogPath.empty()) {
@@ -377,12 +256,6 @@ int runHeadless(const CliArgs& args)
     int rc = 0;
     try {
         for (int frame = 0; frame < totalFrames; ++frame) {
-            // Применяем все события input-script с frame <= текущего
-            while (evIdx < events.size() && events[evIdx].frame <= frame) {
-                con->setInput(0, events[evIdx].buttons);
-                ++evIdx;
-            }
-
             con->runFrame();
             con->clearAudioSamples();   // не накапливать в headless
 

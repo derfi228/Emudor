@@ -17,20 +17,24 @@ _deps/
 *.obj
 
 # ─── ROM Files (Copyright!) ──────────────────────────────────────────────────
-# Нельзя распространять — не коммитить
-roms/*.nes
-roms/*.sfc
-roms/*.smc
-roms/*.z64
-roms/*.n64
-roms/*.gbc
-roms/*.gb
-roms/*.gba
-# nestest.nes — public domain test ROM, можно включить если нужно
-# roms/nestest.nes
+# Нельзя распространять — игнорируем сами файлы по подпапкам.
+# Сами папки roms/<console>/ остаются видимыми в git (структура нужна).
+roms/nes/*.nes
+roms/snes/*.sfc
+roms/snes/*.smc
+roms/gb/*.gb
+roms/gbc/*.gbc
+roms/gba/*.gba
+roms/n64/*.z64
+roms/n64/*.n64
+roms/n64/*.v64
+roms/ps1/*.bin
+roms/ps1/*.iso
+roms/ps1/*.cue
+# nestest.nes — см. исключения в самом конце файла
 
-# nestest.log генерируется автоматически
-roms/nestest.log
+# ─── Тестовые ROM-ы (большой репозиторий, не коммитим) ───────────────────────
+test_roms/
 
 # ─── User Data ───────────────────────────────────────────────────────────────
 config.json
@@ -46,14 +50,19 @@ batman_debug.txt
 batman_frames.txt
 batman_trace.txt
 nestest_out.log
+debug_snes.txt
+smb_test.png
 *.log
 
-# ─── Throwaway Debug Scripts (корень проекта) ────────────────────────────────
-dump_rom.py
-dump_rom2.py
-dump_rom3.py
-dump_rom4.py
-dump_rom5.py
+# ─── Удалённые подсистемы (на случай если папка снова появится) ──────────────
+input_scripts/
+
+# ─── Throwaway Debug Scripts (только корень проекта, не в tools/) ───────────
+/dump_rom.py
+/dump_rom2.py
+/dump_rom3.py
+/dump_rom4.py
+/dump_rom5.py
 
 # ─── IDE / Editor ────────────────────────────────────────────────────────────
 .vscode/
@@ -77,3 +86,7 @@ agent_data/screenshots/
 agent_data/baselines/
 agent_data/logs/
 agent_data/*.db
+# ─── Исключения (идут после всех правил, имеют приоритет) ────────────────────
+# nestest — public domain тест-ROM + эталонный лог для регрессии NES CPU
+!roms/nes/nestest.nes
+!roms/nes/nestest.log
