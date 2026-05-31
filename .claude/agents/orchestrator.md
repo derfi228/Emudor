@@ -8,15 +8,11 @@ tools: Read, Write, Bash, Task
 
 # Окружение
 
-- Командная оболочка: **bash MinGW64** (MSYS2). PowerShell не используется.
-- `sqlite3` CLI **не установлен**. Все запросы к `agent_data/issues.db` выполняй через Python:
-  ```bash
-  python -c "import sqlite3; c=sqlite3.connect('agent_data/issues.db'); \
-    print(list(c.execute('SELECT id, severity, title FROM issues WHERE status=\"open\" AND console=\"SNES\"')))"
-  ```
-  (Если пользователь сам поставит `pacman -S mingw-w64-x86_64-sqlite3` — можно использовать прямые
-  команды `sqlite3 agent_data/issues.db "..."`.)
-- Корень проекта: `/e/Claude_projects/Emu/Emudor`.
+- Командная оболочка: **Windows PowerShell**. Пути с `\` (бэкслеши).
+- `sqlite3` CLI не установлен — для работы с `agent_data\issues.db` используй готовые Python-утилиты:
+  - `python tools\db_query.py "<SELECT ...>"` — любой запрос на чтение
+  - `python tools\db_exec.py "<SQL с ?>" <param1> <param2> ...` — INSERT/UPDATE/DELETE с параметрами
+- Корень проекта: `E:\Claude_projects\Emu\Emudor`.
 
 # Статус проекта
 
@@ -29,18 +25,8 @@ tools: Read, Write, Bash, Task
 1. Вызови `tester` для SNES (используй инструмент Task)
 
 2. Прочитай новые issues:
-   ```bash
-   python -c "
-   import sqlite3
-   c = sqlite3.connect('agent_data/issues.db')
-   for row in c.execute(\"\"\"SELECT id, severity, title FROM issues
-                            WHERE status='open' AND console='SNES'
-                            ORDER BY CASE severity WHEN 'critical' THEN 1
-                                                   WHEN 'high'     THEN 2
-                                                   WHEN 'medium'   THEN 3
-                                                   ELSE 4 END LIMIT 3\"\"\"):
-       print(row)
-   "
+   ```powershell
+   python tools\db_query.py "SELECT id, severity, title FROM issues WHERE status='open' AND console='SNES' ORDER BY CASE severity WHEN 'critical' THEN 1 WHEN 'high' THEN 2 WHEN 'medium' THEN 3 ELSE 4 END LIMIT 3"
    ```
 
 3. Для каждого из топ-3 issues:
@@ -48,16 +34,15 @@ tools: Read, Write, Bash, Task
    - б. Вызови `coder` с этим issue_id
    - в. Вызови `reviewer` с веткой от coder'а
 
-4. Раз в 3 итерации — прогон NES регрессии через `tester` + запуск `./build/debug/nestest.exe roms/nes/nestest.nes roms/nes/nestest.log` и `./build/debug/nes_tests.exe`
+4. Раз в 3 итерации — прогон NES регрессии через `tester` + запуск:
+   ```powershell
+   .\build\debug\nestest.exe roms\nes\nestest.nes roms\nes\nestest.log
+   .\build\debug\nes_tests.exe
+   ```
 
 5. Прочитай неотвеченные вопросы:
-   ```bash
-   python -c "
-   import sqlite3
-   c = sqlite3.connect('agent_data/issues.db')
-   for row in c.execute('SELECT id, agent, question, options FROM questions_for_user WHERE user_answer IS NULL'):
-       print(row)
-   "
+   ```powershell
+   python tools\db_query.py "SELECT id, agent, question, options FROM questions_for_user WHERE user_answer IS NULL"
    ```
 
 6. Если есть вопросы — выведи их пользователю в формате:

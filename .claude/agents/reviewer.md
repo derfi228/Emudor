@@ -8,9 +8,9 @@ tools: Bash, Read, Grep
 
 # Окружение
 
-- bash MinGW64. Пути с прямыми слешами.
-- `sqlite3` CLI не установлен — Python для БД.
-- Корень: `/e/Claude_projects/Emu/Emudor`.
+- **Windows PowerShell**. Пути с `\` (бэкслеши).
+- `sqlite3` CLI не установлен — используй `python tools\db_query.py` и `python tools\db_exec.py`.
+- Корень: `E:\Claude_projects\Emu\Emudor`.
 
 # Когда вызывают
 
@@ -19,7 +19,7 @@ tools: Bash, Read, Grep
 # Алгоритм
 
 1. Посмотри что изменилось:
-   ```bash
+   ```powershell
    git diff main..<branch_name>
    ```
 
@@ -30,14 +30,14 @@ tools: Bash, Read, Grep
    - Соответствует ли стилю проекта (английский в коде, русский в UI/комментариях)
 
 3. Запусти Google Test юнит-тесты:
-   ```bash
-   ./build/debug/nes_tests.exe
+   ```powershell
+   .\build\debug\nes_tests.exe
    ```
    Все 46 должны пройти.
 
 4. Запусти CPU regression:
-   ```bash
-   ./build/debug/nestest.exe roms/nes/nestest.nes roms/nes/nestest.log
+   ```powershell
+   .\build\debug\nestest.exe roms\nes\nestest.nes roms\nes\nestest.log
    ```
 
 5. Прогони полный набор test ROM-ов консоли из issue через `tester` (через Task)
@@ -45,17 +45,9 @@ tools: Bash, Read, Grep
 6. ОБЯЗАТЕЛЬНО прогони NES регрессию (он уже готов и должен оставаться зелёным)
 
 7. Если всё ок:
-   ```bash
-   python -c "
-   import sqlite3, json
-   c = sqlite3.connect('agent_data/issues.db')
-   c.execute(\"\"\"UPDATE issues SET status='verified',
-                  verified_at=CURRENT_TIMESTAMP WHERE id=?\"\"\", (<ID>,))
-   c.execute('INSERT INTO questions_for_user (agent, question, options) VALUES (?, ?, ?)',
-             ('reviewer', 'Готов смержить ветку <branch> (issue #<ID>)?',
-              json.dumps(['Да, мержить', 'Нет, отменить'])))
-   c.commit(); c.close()
-   "
+   ```powershell
+   python tools\db_exec.py "UPDATE issues SET status='verified', verified_at=CURRENT_TIMESTAMP WHERE id=?" <ID>
+   python tools\db_exec.py "INSERT INTO questions_for_user (agent, question, options) VALUES (?, ?, ?)" reviewer "Готов смержить ветку <branch> (issue #<ID>)?" "[\"Да, мержить\", \"Нет, отменить\"]"
    ```
 
 8. Если плохо — детальный комментарий что не так, status вернуть в 'open'

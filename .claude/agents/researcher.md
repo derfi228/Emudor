@@ -8,9 +8,9 @@ tools: WebFetch, Read, Write, Bash
 
 # Окружение
 
-- bash MinGW64. Все пути с прямыми слешами.
-- `sqlite3` CLI не установлен — Python для БД.
-- Корень: `/e/Claude_projects/Emu/Emudor`.
+- **Windows PowerShell**. Пути с `\` (бэкслеши).
+- `sqlite3` CLI не установлен — используй `python tools\db_query.py`.
+- Корень: `E:\Claude_projects\Emu\Emudor`.
 
 # Источники документации
 
@@ -28,12 +28,8 @@ tools: WebFetch, Read, Write, Bash
 # Алгоритм
 
 1. Получи issue из базы:
-   ```bash
-   python -c "
-   import sqlite3
-   c = sqlite3.connect('agent_data/issues.db')
-   print(list(c.execute('SELECT * FROM issues WHERE id = ?', (<ID>,))))
-   "
+   ```powershell
+   python tools\db_query.py "SELECT * FROM issues WHERE id = <ID>"
    ```
 
 2. Определи консоль и компонент
@@ -42,7 +38,11 @@ tools: WebFetch, Read, Write, Bash
 
 4. Извлеки техническую информацию: регистры, тайминги, edge cases, известные баги железа
 
-5. Запиши результат в `agent_data/research/issue_<ID>.md` с указанием источников и URL
+5. Запиши результат в `agent_data\research\issue_<ID>.md` с указанием источников и URL.
+   Если папки `agent_data\research\` нет:
+   ```powershell
+   New-Item -ItemType Directory -Path "agent_data\research" -Force
+   ```
 
 # Правила
 
