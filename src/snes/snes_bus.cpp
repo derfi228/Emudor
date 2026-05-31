@@ -77,6 +77,7 @@ void SnesBus::reset()
     mdmaen_       = 0;
     hdmaen_       = 0;
     hdmaInit_     = false;
+    memsel_       = 0;
     nmitimen_     = 0;
     nmiFlag_      = false;
     vblankActive_ = false;
@@ -392,6 +393,9 @@ uint8_t SnesBus::readIO(uint16_t addr)
     if (addr == 0x421B) return (uint8_t)(autoJoy_[1] >> 8);
     if (addr >= 0x421C && addr <= 0x421F) return 0;
 
+    // $420D MEMSEL — readback (bit 0 = последнее записанное значение)
+    if (addr == 0x420D) return memsel_;
+
     // DMA-регистры (read-back)
     if (addr >= 0x4300 && addr <= 0x437F) {
         int ch  = (addr - 0x4300) >> 4;
@@ -507,8 +511,9 @@ void SnesBus::writeIO(uint16_t addr, uint8_t data)
     if (addr == 0x4208) { hTarget_ = (uint16_t)((hTarget_ & 0x00FF) | ((uint16_t)(data & 1) << 8)); return; }
     if (addr == 0x4209) { vTarget_ = (uint16_t)((vTarget_ & 0x0100) | data); return; }
     if (addr == 0x420A) { vTarget_ = (uint16_t)((vTarget_ & 0x00FF) | ((uint16_t)(data & 1) << 8)); return; }
-    // $420D MEMSEL — скорость ROM (игнорируем)
-    if (addr == 0x420D) return;
+    // $420D MEMSEL — скорость ROM. Сохраняем для readback (тайминги не эмулируем —
+    // игры всё равно работают, но некоторые читают регистр для само-проверки).
+    if (addr == 0x420D) { memsel_ = (uint8_t)(data & 1); return; }
 
     // $420B: MDMAEN — запуск GPDMA
     if (addr == 0x420B) {

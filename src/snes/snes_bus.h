@@ -144,6 +144,7 @@ private:
     uint8_t     mdmaen_ = 0;     // $420B: маска активных GPDMA-каналов
     uint8_t     hdmaen_ = 0;     // $420C: маска активных HDMA-каналов
     bool        hdmaInit_ = false;
+    uint8_t     memsel_ = 0;     // $420D bit 0: 0=SlowROM, 1=FastROM (хранение для readback)
 
     void runGDMA (uint8_t channels);
     void execGDMACh(int ch);
