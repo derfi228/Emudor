@@ -103,15 +103,15 @@ if(CURL_FOUND)
     target_compile_definitions(emudor PRIVATE NES_HAVE_CURL)
 endif()
 
-# ─── Копирование DLL рядом с exe (Windows / MinGW) ───────────────────────────
+# Копировать DLL рядом с exe
 if(WIN32)
-    # SDL2 и SDL2_image — известные таргеты
     add_custom_command(TARGET emudor POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             $<TARGET_FILE:SDL2::SDL2>
             $<TARGET_FILE_DIR:emudor>
         COMMENT "Copying SDL2 DLL"
     )
+    # SDL2_image DLL
     get_target_property(_sdl2img_loc SDL2_image::SDL2_image LOCATION)
     if(_sdl2img_loc)
         add_custom_command(TARGET emudor POST_BUILD
@@ -121,34 +121,6 @@ if(WIN32)
             COMMENT "Copying SDL2_image DLL"
         )
     endif()
-
-    # Все MinGW runtime DLL — собираем через file(GET_RUNTIME_DEPENDENCIES)
-    # и копируем в output dir при сборке.
-    # cmake_install.cmake дополнительно устанавливает их при cmake --install.
-    install(TARGETS emudor RUNTIME DESTINATION .)
-    install(CODE "
-        file(GET_RUNTIME_DEPENDENCIES
-            EXECUTABLES \"\${CMAKE_INSTALL_PREFIX}/emudor.exe\"
-            RESOLVED_DEPENDENCIES_VAR _r_deps
-            UNRESOLVED_DEPENDENCIES_VAR _u_deps
-            DIRECTORIES \"${CMAKE_PREFIX_PATH}/bin\" \"C:/msys64/mingw64/bin\"
-            PRE_EXCLUDE_REGEXES  \"^api-ms-\" \"^ext-ms-\" \"^hvsifiletrust\"
-            POST_EXCLUDE_REGEXES \"/Windows/\" \"/windows/\"
-        )
-        foreach(_dep \${_r_deps})
-            file(INSTALL \${_dep} DESTINATION \"\${CMAKE_INSTALL_PREFIX}\" TYPE SHARED_LIBRARY FOLLOW_SYMLINK_CHAIN)
-        endforeach()
-    ")
-
-    # POST_BUILD: автоматически копируем все зависимости рядом с exe после линковки
-    add_custom_command(TARGET emudor POST_BUILD
-        COMMAND ${CMAKE_COMMAND}
-            -DEXE_PATH=$<TARGET_FILE:emudor>
-            -DDEST_DIR=$<TARGET_FILE_DIR:emudor>
-            -DMINGW_BIN=C:/msys64/mingw64/bin
-            -P ${CMAKE_SOURCE_DIR}/cmake/copy_runtime_dlls.cmake
-        COMMENT "Copying MinGW runtime DLLs"
-    )
 endif()
 
 # ─── nes_tests ───────────────────────────────────────────────────────────────

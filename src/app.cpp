@@ -1120,16 +1120,13 @@ void App::pruneDeletedRoms()
         romList_.end());
 }
 
-// Сканируем все папки из romFolders_ и добавляем новые ROM (рекурсивно)
+// Сканируем все папки из romFolders_ и добавляем новые ROM
 void App::scanRomFolders()
 {
     for (const auto& folder : romFolders_) {
         if (!fs::exists(folder)) continue;
-        // recursive_directory_iterator обходит всё дерево подпапок
-        std::error_code ec;
-        for (auto& entry : fs::recursive_directory_iterator(folder,
-                fs::directory_options::skip_permission_denied, ec)) {
-            if (!entry.is_regular_file(ec)) continue;
+        for (auto& entry : fs::directory_iterator(folder)) {
+            if (!entry.is_regular_file()) continue;
             auto ct = detectConsole(entry.path().string());
             if (ct == ConsoleType::Unknown) continue;
             std::string p = entry.path().string();
