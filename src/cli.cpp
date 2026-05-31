@@ -15,7 +15,10 @@
 #include <SDL2/SDL_image.h>
 
 #include <algorithm>
+#include <csignal>
 #include <cstdio>
+#include <cstdlib>
+#include <exception>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -185,9 +188,65 @@ std::string makeNumberedPath(const std::string& tpl, int frame)
 
 } // namespace
 
+// ─── Перехват крашей: переводим всё в rc=2 ──────────────────────────────────
+// На Windows MinGW abort() / SIGABRT / SIGSEGV дают exit code 3 (signal-based)
+// или 0xC0000005 (access violation). Спецификация CLI говорит «rc=2 = краш».
+// Чтобы tester мог надёжно отличать "штатный fail" от "что-то очень плохое",
+// перехватываем всё что можно перехватить C++/POSIX-средствами.
+namespace {
+
+[[noreturn]] void crashExit(const char* what)
+{
+    std::fputs("Crash: ", stderr);
+    std::fputs(what, stderr);
+    std::fputc('\n', stderr);
+    std::fflush(stderr);
+    std::_Exit(2);
+}
+
+extern "C" void signalCrashHandler(int sig)
+{
+    const char* name = "unknown signal";
+    switch (sig) {
+        case SIGABRT: name = "SIGABRT (abort/assert)"; break;
+        case SIGSEGV: name = "SIGSEGV (segmentation fault)"; break;
+        case SIGFPE:  name = "SIGFPE (floating-point exception)"; break;
+        case SIGILL:  name = "SIGILL (illegal instruction)"; break;
+    }
+    crashExit(name);
+}
+
+void terminateHandler()
+{
+    // Сюда попадаем при uncaught C++ exception или std::terminate()
+    try {
+        if (auto ep = std::current_exception()) std::rethrow_exception(ep);
+        crashExit("std::terminate() called");
+    } catch (const std::exception& e) {
+        crashExit(e.what());
+    } catch (...) {
+        crashExit("unknown C++ exception");
+    }
+}
+
+void installCrashHandlers()
+{
+    std::set_terminate(terminateHandler);
+    std::signal(SIGABRT, signalCrashHandler);
+    std::signal(SIGSEGV, signalCrashHandler);
+    std::signal(SIGFPE,  signalCrashHandler);
+    std::signal(SIGILL,  signalCrashHandler);
+}
+
+} // namespace
+
 // ─── Headless-прогонка ───────────────────────────────────────────────────────
 int runHeadless(const CliArgs& args)
 {
+    // Ставим перехватчики крашей ДО любого взаимодействия с эмуляцией.
+    // Любой signal или uncaught exception → rc=2 (вместо системного rc=3).
+    installCrashHandlers();
+
     // SDL без видео — нужен только для IMG_SavePNG (и SDL_CreateRGBSurfaceWithFormatFrom).
     if (SDL_Init(0) != 0) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
