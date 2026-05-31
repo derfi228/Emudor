@@ -86,6 +86,9 @@ agent_data/screenshots/
 agent_data/baselines/
 agent_data/logs/
 agent_data/*.db
+
+# Локальный отчёт о состоянии работы агентов — генерируется python tools/status_report.py
+STATUS.md
 # ─── Исключения (идут после всех правил, имеют приоритет) ────────────────────
 # nestest — public domain тест-ROM + эталонный лог для регрессии NES CPU
 !roms/nes/nestest.nes
