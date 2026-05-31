@@ -1,0 +1,4 @@
+=== SNES state after 180 frames ===
+CPU: PBR=00 PC=806D A=9400 X=00E2 Y=0000 SP=01FF P=32 E=0
+CPU: waiting=0 stopped=0
+SPC: PC=FFD2 portOut[0]=AA portOut[1]=BB

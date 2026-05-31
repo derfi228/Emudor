@@ -123,11 +123,21 @@ void printCliHelp()
         "  --record-trace <path>   Записать лог трассировки CPU в файл\n"
         "  --help, -h              Показать эту справку\n"
         "\n"
-        "Формат input-script: одна строка на событие\n"
-        "  <frame> <button>[+<button>...]      — установить состояние кнопок\n"
-        "  <frame> 0  или  <frame> RELEASE     — отпустить все кнопки\n"
-        "  Кнопки (case-insensitive): UP DOWN LEFT RIGHT A B X Y L R SELECT START\n"
-        "  Строки '#...' — комментарии\n"
+        "Формат input-script:\n"
+        "  <frame> <button> <action>    # одно событие на строку\n"
+        "  frame   — целое число (номер кадра от старта)\n"
+        "  button  — UP DOWN LEFT RIGHT A B  (NES)\n"
+        "            + X Y L R              (только SNES)\n"
+        "            + START SELECT         (обе системы)\n"
+        "            (регистр не важен)\n"
+        "  action  — press  / release\n"
+        "  '#...'  — комментарий, пустые строки игнорируются\n"
+        "\n"
+        "  Пример:\n"
+        "    60  START press\n"
+        "    70  START release\n"
+        "    90  RIGHT press\n"
+        "    130 RIGHT release\n"
         "\n"
         "Коды возврата:\n"
         "  0 — успех\n"
@@ -200,54 +210,53 @@ std::string makeNumberedPath(const std::string& tpl, int frame)
 }
 
 // ─── Input-script ────────────────────────────────────────────────────────────
-// Простой формат: '<frame> <btn1>+<btn2>+...' на строке. '#' — комментарий.
-// Каждое событие устанавливает текущее состояние кнопок (persists до следующего).
+// Формат: '<frame> <BUTTON> press|release'
+//   frame   — целое число (номер кадра от старта)
+//   button  — UP DOWN LEFT RIGHT A B X Y L R START SELECT (case-insensitive)
+//   action  — press или release
+//   '#...'  — комментарий, пустые строки игнорируются
+//
+// Кнопки накапливаются в running state: press ставит бит, release снимает.
+// В каждом кадре все события на этот frame применяются ДО runFrame().
 struct InputEvent {
     int      frame;
-    uint16_t buttons;  // для NES — нижние 8 бит, для SNES — 16 бит
+    uint16_t buttonMask;  // одна кнопка — ровно один бит
+    bool     isPress;     // true=press, false=release
 };
 
-uint16_t parseButtonsForConsole(const std::string& tokenList, bool isSnes)
+// Возвращает битовую маску одной кнопки.
+// Для NES кнопки X/Y/L/R недоступны — возвращаем 0 с предупреждением.
+uint16_t buttonMaskOf(const std::string& name, bool isSnes, int lineNo)
 {
-    if (tokenList.empty()) return 0;
-    std::string s = tokenList;
-    std::transform(s.begin(), s.end(), s.begin(),
-                   [](unsigned char c){ return (char)std::toupper(c); });
-
-    if (s == "0" || s == "RELEASE" || s == "NONE") return 0;
-
-    // SNES маска (биты 15..4): B Y SEL START UP DOWN LEFT RIGHT A X L R 0 0 0 0
-    static const std::unordered_map<std::string, uint16_t> snesMap = {
-        {"B",      1u << 15}, {"Y",      1u << 14},
-        {"SELECT", 1u << 13}, {"START",  1u << 12},
-        {"UP",     1u << 11}, {"DOWN",   1u << 10},
-        {"LEFT",   1u <<  9}, {"RIGHT",  1u <<  8},
-        {"A",      1u <<  7}, {"X",      1u <<  6},
-        {"L",      1u <<  5}, {"R",      1u <<  4},
+    // SNES: B(15) Y(14) SELECT(13) START(12) UP(11) DOWN(10) LEFT(9) RIGHT(8)
+    //       A(7)  X(6)  L(5)       R(4)
+    // NES:  A(7)  B(6)  SELECT(5)  START(4)  UP(3)  DOWN(2)  LEFT(1) RIGHT(0)
+    static const std::unordered_map<std::string, std::pair<uint16_t,uint16_t>> table = {
+    //  name      NES-mask    SNES-mask
+        {"UP",    {1u<<3,  1u<<11}},
+        {"DOWN",  {1u<<2,  1u<<10}},
+        {"LEFT",  {1u<<1,  1u<< 9}},
+        {"RIGHT", {1u<<0,  1u<< 8}},
+        {"A",     {1u<<7,  1u<< 7}},
+        {"B",     {1u<<6,  1u<<15}},
+        {"SELECT",{1u<<5,  1u<<13}},
+        {"START", {1u<<4,  1u<<12}},
+        // SNES-only:
+        {"X",     {0,      1u<< 6}},
+        {"Y",     {0,      1u<<14}},
+        {"L",     {0,      1u<< 5}},
+        {"R",     {0,      1u<< 4}},
     };
-    // NES маска (биты 7..0): A B SELECT START UP DOWN LEFT RIGHT
-    static const std::unordered_map<std::string, uint16_t> nesMap = {
-        {"A",      1u << 7}, {"B",      1u << 6},
-        {"SELECT", 1u << 5}, {"START",  1u << 4},
-        {"UP",     1u << 3}, {"DOWN",   1u << 2},
-        {"LEFT",   1u << 1}, {"RIGHT",  1u << 0},
-    };
-    const auto& map = isSnes ? snesMap : nesMap;
-
-    uint16_t mask = 0;
-    std::string cur;
-    auto flush = [&]() {
-        if (cur.empty()) return;
-        auto it = map.find(cur);
-        if (it != map.end()) mask |= it->second;
-        else std::fprintf(stderr, "input-script: unknown button '%s'\n", cur.c_str());
-        cur.clear();
-    };
-    for (char c : s) {
-        if (c == '+' || c == ' ' || c == '\t') flush();
-        else cur.push_back(c);
+    auto it = table.find(name);
+    if (it == table.end()) {
+        std::fprintf(stderr, "input-script:%d: unknown button '%s'\n", lineNo, name.c_str());
+        return 0;
     }
-    flush();
+    uint16_t mask = isSnes ? it->second.second : it->second.first;
+    if (mask == 0 && !isSnes) {
+        std::fprintf(stderr, "input-script:%d: button '%s' not available on NES\n",
+                     lineNo, name.c_str());
+    }
     return mask;
 }
 
@@ -256,40 +265,52 @@ bool loadInputScript(const std::string& path, bool isSnes,
 {
     std::ifstream f(path);
     if (!f) {
-        std::fprintf(stderr, "input-script: cannot open %s\n", path.c_str());
+        std::fprintf(stderr, "input-script: cannot open '%s'\n", path.c_str());
         return false;
     }
     std::string line;
     int lineNo = 0;
+    int loaded = 0;
     while (std::getline(f, line)) {
         ++lineNo;
-        // Trim leading whitespace
-        size_t a = line.find_first_not_of(" \t\r");
-        if (a == std::string::npos) continue;
-        if (line[a] == '#') continue;
-        std::string rest = line.substr(a);
+        // Убираем \r (Windows CRLF) и ведущие пробелы
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        size_t start = line.find_first_not_of(" \t");
+        if (start == std::string::npos) continue;   // пустая строка
+        if (line[start] == '#') continue;            // комментарий
 
-        // frame_number
-        std::istringstream iss(rest);
-        int frame; iss >> frame;
-        if (!iss) {
-            std::fprintf(stderr, "input-script:%d: expected frame number\n", lineNo);
+        std::istringstream iss(line.substr(start));
+        int frame;
+        std::string btnName, action;
+        if (!(iss >> frame >> btnName >> action)) {
+            std::fprintf(stderr, "input-script:%d: expected '<frame> <button> press|release'\n",
+                         lineNo);
             continue;
         }
-        std::string buttons;
-        std::getline(iss, buttons);
-        // strip
-        size_t b1 = buttons.find_first_not_of(" \t\r");
-        if (b1 != std::string::npos) buttons = buttons.substr(b1);
-        else                          buttons.clear();
+        // Нормализуем к upper
+        std::transform(btnName.begin(), btnName.end(), btnName.begin(),
+                       [](unsigned char c){ return (char)std::toupper(c); });
+        std::transform(action.begin(), action.end(), action.begin(),
+                       [](unsigned char c){ return (char)std::tolower(c); });
 
-        InputEvent ev;
-        ev.frame   = frame;
-        ev.buttons = parseButtonsForConsole(buttons, isSnes);
-        out.push_back(ev);
+        if (action != "press" && action != "release") {
+            std::fprintf(stderr, "input-script:%d: action must be 'press' or 'release', got '%s'\n",
+                         lineNo, action.c_str());
+            continue;
+        }
+
+        uint16_t mask = buttonMaskOf(btnName, isSnes, lineNo);
+        if (mask == 0) continue;  // ошибка уже напечатана
+
+        out.push_back({ frame, mask, (action == "press") });
+        ++loaded;
     }
-    std::sort(out.begin(), out.end(),
-              [](const InputEvent& x, const InputEvent& y){ return x.frame < y.frame; });
+
+    // Сортируем по кадру (стабильно — сохраняем порядок событий одного кадра)
+    std::stable_sort(out.begin(), out.end(),
+                     [](const InputEvent& a, const InputEvent& b){ return a.frame < b.frame; });
+
+    std::fprintf(stdout, "input-script: loaded %d events from '%s'\n", loaded, path.c_str());
     return true;
 }
 
@@ -352,11 +373,11 @@ int runHeadless(const CliArgs& args)
     // ── Input-script (опционально) ───────────────────────────────────────────
     std::vector<InputEvent> events;
     if (!args.inputScriptPath.empty()) {
-        if (!loadInputScript(args.inputScriptPath, isSnes, events)) {
-            // не падаем — продолжаем без ввода
-        }
+        loadInputScript(args.inputScriptPath, isSnes, events);
+        // Ошибка открытия — продолжаем без ввода; отдельные строки с ошибками — пропущены
     }
     size_t evIdx = 0;
+    uint16_t scriptButtons = 0;  // накапливаемое состояние: press ставит бит, release снимает
 
     // ── Trace log (опционально) ──────────────────────────────────────────────
     std::ofstream traceOut;
@@ -377,10 +398,23 @@ int runHeadless(const CliArgs& args)
     int rc = 0;
     try {
         for (int frame = 0; frame < totalFrames; ++frame) {
-            // Применяем все события input-script с frame <= текущего
+            // Применяем все события скрипта на этот кадр.
+            // press → устанавливаем бит, release → снимаем.
+            // Состояние накапливается: кнопка остаётся зажатой до release.
+            bool inputChanged = false;
             while (evIdx < events.size() && events[evIdx].frame <= frame) {
-                con->setInput(0, events[evIdx].buttons);
+                const InputEvent& ev = events[evIdx];
+                if (ev.isPress)
+                    scriptButtons |=  ev.buttonMask;
+                else
+                    scriptButtons &= ~ev.buttonMask;
+                inputChanged = true;
                 ++evIdx;
+            }
+            // Передаём текущее состояние кнопок в консоль.
+            // В headless-режиме реальная клавиатура не читается, только скрипт.
+            if (inputChanged || !events.empty()) {
+                con->setInput(0, scriptButtons);
             }
 
             con->runFrame();
