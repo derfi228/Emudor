@@ -639,8 +639,11 @@ void SnesBus::execHDMACh(int ch)
     if (d.hdmaFinished) return;
 
     bool indirect = (d.dmap & 0x40) != 0;
+    bool doTransfer = false;
 
-    // Если счётчик исчерпан — загружаем следующий NTRL (и новый das для косвенного)
+    // ── Начало новой группы: счётчик исчерпан ───────────────────────────────
+    // Загружаем NTRL (line counter + mode bit), и для indirect — новый das.
+    // Первая строка группы ВСЕГДА получает transfer.
     if ((d.ntrl & 0x7F) == 0) {
         d.ntrl = read((uint32_t)((d.a1b << 16) | d.a2a++));
         if (d.ntrl == 0) { d.hdmaFinished = true; return; }
@@ -649,30 +652,37 @@ void SnesBus::execHDMACh(int ch)
             uint8_t hi = read((uint32_t)((d.a1b << 16) | d.a2a++));
             d.das = (uint16_t)(lo | (hi << 8));
         }
-    }
-
-    // Источник данных: прямой → a2a, косвенный → das (с банком dasb)
-    uint8_t mode = d.dmap & 0x07;
-    int     plen = kDmaPatternLen[mode];
-    uint32_t src = indirect
-        ? (uint32_t)((d.dasb << 16) | d.das)
-        : (uint32_t)((d.a1b  << 16) | d.a2a);
-
-    for (int i = 0; i < plen; ++i) {
-        int regOff = kDmaPattern[mode][i];
-        uint16_t bAddr = (uint16_t)(0x2100 + d.bbad + regOff);
-        writeIO(bAddr, read((uint32_t)(src + (uint32_t)i)));
-    }
-
-    // Обновляем указатель источника
-    if (indirect) {
-        d.das = (uint16_t)(d.das + (uint16_t)plen);
+        doTransfer = true;
     } else {
-        d.a2a = (uint16_t)(d.a2a + (uint16_t)plen);
+        // Внутри группы. Бит 7 NTRL:
+        //   1 = Continue mode — каждая строка получает СВЕЖИЕ байты из source
+        //   0 = Same mode — байты были прочитаны в первой строке группы,
+        //                   следующие N-1 строк просто пропускаем (для PPU
+        //                   регистры уже установлены)
+        doTransfer = (d.ntrl & 0x80) != 0;
     }
 
-    // Уменьшаем счётчик строк (бит 7 = repeat, бит 6:0 = count)
-    if (!(d.ntrl & 0x80)) --d.ntrl;
+    if (doTransfer) {
+        uint8_t mode = d.dmap & 0x07;
+        int     plen = kDmaPatternLen[mode];
+        uint32_t src = indirect
+            ? (uint32_t)((d.dasb << 16) | d.das)
+            : (uint32_t)((d.a1b  << 16) | d.a2a);
+
+        for (int i = 0; i < plen; ++i) {
+            int regOff = kDmaPattern[mode][i];
+            uint16_t bAddr = (uint16_t)(0x2100 + d.bbad + regOff);
+            writeIO(bAddr, read((uint32_t)(src + (uint32_t)i)));
+        }
+
+        // Двигаем указатель источника ТОЛЬКО при реальном transfer
+        if (indirect) d.das = (uint16_t)(d.das + (uint16_t)plen);
+        else          d.a2a = (uint16_t)(d.a2a + (uint16_t)plen);
+    }
+
+    // ВСЕГДА уменьшаем счётчик строк (бит 7 не трогаем — он уцелеет
+    // пока биты 6:0 не достигнут 0, после чего загрузим новый NTRL).
+    d.ntrl = (uint8_t)((d.ntrl & 0x80) | ((d.ntrl - 1) & 0x7F));
 }
 
 // ─── Battery SRAM ─────────────────────────────────────────────────────────────
