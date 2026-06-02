@@ -4,6 +4,7 @@
 #include <istream>
 #include <cstring>
 #include <cstdio>
+#include <cstdlib>
 
 // ─── Тайминг SNES (NTSC) ─────────────────────────────────────────────────────
 // Мастер-такт: 21.477272 МГц
@@ -105,6 +106,13 @@ void SnesConsole::runFrame()
 
     // VBlank завершился, сбрасываем флаг
     bus_.setVBlankActive(false);
+
+    // ─── Диагностика: трассировка CPU PC каждый кадр (EMUDOR_CPU_TRACE) ──────
+    if (std::getenv("EMUDOR_CPU_TRACE")) {
+        fprintf(stderr, "f=%d PBR:PC=%02X:%04X A=%04X X=%04X Y=%04X SP=%04X P=%02X wait=%d stop=%d\n",
+                dbgFrames_, cpu_.PBR, cpu_.PC, cpu_.A, cpu_.X, cpu_.Y, cpu_.SP, cpu_.P,
+                (int)cpu_.waiting_, (int)cpu_.stopped_);
+    }
 
     // ─── Диагностика: после 180 кадров — дамп в файл ─────────────────────────
     if (++dbgFrames_ == 180) {

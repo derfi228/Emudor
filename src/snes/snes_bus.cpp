@@ -378,7 +378,20 @@ uint8_t SnesBus::readIO(uint16_t addr)
         return v;
     }
     // $4212 HVBJOY: VBlank (bit7) + HBlank (bit6) + joypad busy (bit0)
-    if (addr == 0x4212) return (uint8_t)(vblankActive_ ? 0x80 : 0x00);
+    if (addr == 0x4212) {
+        // HVBJOY: bit7=VBlank, bit6=HBlank, bit0=auto-joypad busy.
+        // Многие игры (SMW и др.) опрашивают bit6 в tight-loop для синхронизации
+        // по строкам — без него CPU зависает навсегда.
+        uint8_t v = 0;
+        if (ppu_) {
+            if (ppu_->curScanline() >= 225) v |= 0x80;          // VBlank (строки 225-261)
+            uint16_t d = ppu_->curDot();
+            if (d >= 274 || d < 2)          v |= 0x40;          // HBlank (≈ dot 274-340 + 0-1)
+        } else {
+            v = vblankActive_ ? 0x80 : 0x00;
+        }
+        return v;   // bit0 auto-joypad: у нас мгновенный → 0
+    }
     // $4213 I/O port input
     if (addr == 0x4213) return 0xFF;
     // $4214–$4217: результаты деления/умножения

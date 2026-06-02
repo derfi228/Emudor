@@ -12,6 +12,7 @@ struct CliArgs {
     int         screenshotEvery  = 0;      // --screenshot-every N (0 = выкл)
     bool        headless         = false;  // --headless
     std::string traceLogPath;     // --record-trace
+    std::string inputScriptPath;  // --input-script (debug: воспроизведение нажатий)
 
     bool        printHelp        = false;  // --help / -h
     std::string errorMsg;                  // непустое — ошибка парсинга

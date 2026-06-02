@@ -20,8 +20,11 @@
 #include <cstdlib>
 #include <exception>
 #include <fstream>
+#include <map>
 #include <memory>
+#include <sstream>
 #include <string>
+#include <vector>
 
 // ─── Парсинг командной строки ────────────────────────────────────────────────
 namespace {
@@ -85,6 +88,10 @@ CliArgs parseCli(int argc, char** argv)
         else if (flag == "--record-trace") {
             const char* v = needVal("--record-trace"); if (!v) return a;
             a.traceLogPath = v;
+        }
+        else if (flag == "--input-script") {
+            const char* v = needVal("--input-script"); if (!v) return a;
+            a.inputScriptPath = v;
         }
         else if (flag.rfind("--", 0) == 0) {
             a.errorMsg = "unknown flag: " + flag;
@@ -184,6 +191,80 @@ std::string makeNumberedPath(const std::string& tpl, int frame)
     char buf[16];
     std::snprintf(buf, sizeof(buf), "_%04d", frame);
     return stem + buf + ext;
+}
+
+// ─── Input-script (debug-инструмент для воспроизведения нажатий) ─────────────
+// Формат: одна строка на событие "<frame> <BUTTON> <press|release>".
+// '#' — комментарий, пустые строки игнорируются.
+// Кнопки: UP DOWN LEFT RIGHT A B X Y L R START SELECT (X/Y/L/R только SNES).
+// Состояние накапливается: press ставит бит, release снимает, держится до смены.
+struct InputEvent { int frame; uint16_t mask; bool press; };
+
+uint16_t buttonMaskOf(const std::string& nameUpper, bool isSnes)
+{
+    // SNES 16-бит: B(15) Y(14) Sel(13) Start(12) Up(11) Dn(10) Lt(9) Rt(8) A(7) X(6) L(5) R(4)
+    // NES  8-бит:  A(7) B(6) Sel(5) Start(4) Up(3) Dn(2) Lt(1) Rt(0)
+    if (isSnes) {
+        if (nameUpper=="B")      return 1u<<15;
+        if (nameUpper=="Y")      return 1u<<14;
+        if (nameUpper=="SELECT") return 1u<<13;
+        if (nameUpper=="START")  return 1u<<12;
+        if (nameUpper=="UP")     return 1u<<11;
+        if (nameUpper=="DOWN")   return 1u<<10;
+        if (nameUpper=="LEFT")   return 1u<<9;
+        if (nameUpper=="RIGHT")  return 1u<<8;
+        if (nameUpper=="A")      return 1u<<7;
+        if (nameUpper=="X")      return 1u<<6;
+        if (nameUpper=="L")      return 1u<<5;
+        if (nameUpper=="R")      return 1u<<4;
+    } else {
+        if (nameUpper=="A")      return 1u<<7;
+        if (nameUpper=="B")      return 1u<<6;
+        if (nameUpper=="SELECT") return 1u<<5;
+        if (nameUpper=="START")  return 1u<<4;
+        if (nameUpper=="UP")     return 1u<<3;
+        if (nameUpper=="DOWN")   return 1u<<2;
+        if (nameUpper=="LEFT")   return 1u<<1;
+        if (nameUpper=="RIGHT")  return 1u<<0;
+    }
+    return 0;
+}
+
+std::vector<InputEvent> loadInputScript(const std::string& path, bool isSnes)
+{
+    std::vector<InputEvent> events;
+    std::ifstream f(path);
+    if (!f) {
+        std::fprintf(stderr, "input-script: cannot open '%s'\n", path.c_str());
+        return events;
+    }
+    std::string line;
+    int lineNo = 0;
+    while (std::getline(f, line)) {
+        ++lineNo;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        size_t s = line.find_first_not_of(" \t");
+        if (s == std::string::npos || line[s] == '#') continue;
+
+        std::istringstream iss(line.substr(s));
+        int frame; std::string btn, act;
+        if (!(iss >> frame >> btn >> act)) {
+            std::fprintf(stderr, "input-script:%d: expected '<frame> <button> press|release'\n", lineNo);
+            continue;
+        }
+        std::transform(btn.begin(), btn.end(), btn.begin(),
+                       [](unsigned char c){ return (char)std::toupper(c); });
+        std::transform(act.begin(), act.end(), act.begin(),
+                       [](unsigned char c){ return (char)std::tolower(c); });
+        uint16_t mask = buttonMaskOf(btn, isSnes);
+        if (mask == 0) { std::fprintf(stderr, "input-script:%d: bad button '%s'\n", lineNo, btn.c_str()); continue; }
+        bool press = (act == "press");
+        events.push_back({ frame, mask, press });
+    }
+    std::stable_sort(events.begin(), events.end(),
+                     [](const InputEvent& a, const InputEvent& b){ return a.frame < b.frame; });
+    std::fprintf(stdout, "input-script: loaded %zu events from '%s'\n", events.size(), path.c_str());
+    return events;
 }
 
 } // namespace
@@ -310,11 +391,27 @@ int runHeadless(const CliArgs& args)
         }
     }
 
+    // ── Input-script (опционально, debug) ────────────────────────────────────
+    const bool isSnes = (con->getConsoleName() == "SNES");
+    std::vector<InputEvent> events;
+    if (!args.inputScriptPath.empty())
+        events = loadInputScript(args.inputScriptPath, isSnes);
+    size_t evIdx = 0;
+    uint16_t btnState = 0;  // накапливаемое состояние кнопок
+
     // ── Основной цикл ────────────────────────────────────────────────────────
     int totalFrames = (args.frames > 0) ? args.frames : 600;  // дефолт для headless
     int rc = 0;
     try {
         for (int frame = 0; frame < totalFrames; ++frame) {
+            // Применяем события input-script на этот кадр
+            while (evIdx < events.size() && events[evIdx].frame <= frame) {
+                if (events[evIdx].press) btnState |=  events[evIdx].mask;
+                else                     btnState &= ~events[evIdx].mask;
+                ++evIdx;
+            }
+            if (!events.empty()) con->setInput(0, btnState);
+
             con->runFrame();
             con->clearAudioSamples();   // не накапливать в headless
 

@@ -35,6 +35,10 @@ public:
     State getState()           const;
     void  setState(const State& s);
 
+    // Текущая позиция луча (для $4212 HVBJOY: H/V-blank флаги)
+    uint16_t curDot()      const { return dot_; }
+    uint16_t curScanline() const { return scanline_; }
+
 private:
     SnesBus* bus_ = nullptr;
     Framebuffer fb_{};
