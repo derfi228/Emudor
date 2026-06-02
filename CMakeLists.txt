@@ -73,6 +73,7 @@ add_library(nes_core STATIC
     src/snes/snes_bus.cpp
     src/snes/snes_ppu.cpp
     src/snes/snes_apu.cpp
+    src/snes/superfx.cpp
 )
 target_include_directories(nes_core PUBLIC src)
 target_compile_features(nes_core PUBLIC cxx_std_17)

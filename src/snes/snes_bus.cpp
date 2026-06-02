@@ -44,6 +44,10 @@ bool SnesBus::loadROM(const std::string& path)
 
     bool battery = (romType & 0x02) != 0;      // бит 1 = battery
 
+    // SuperFX/GSU: байт типа карточки $FFD6 = 0x13/0x14/0x15/0x1A
+    bool superfx = (romType == 0x13 || romType == 0x14 ||
+                    romType == 0x15 || romType == 0x1A);
+
     // Размер SRAM
     uint32_t sramBytes = sramSize ? (1u << sramSize) * 1024u : 0u;
     sramBytes = std::min(sramBytes, (uint32_t)0x20000);  // макс. 128 KB
@@ -53,6 +57,13 @@ bool SnesBus::loadROM(const std::string& path)
     // Инициализируем SRAM нулями (или оставляем пустой)
     if (sramBytes > 0) {
         sram_.assign(sramBytes, 0x00);
+    }
+
+    // Инициализируем GSU после загрузки ROM
+    hasSuperFX_ = superfx;
+    if (superfx) {
+        uint32_t gsuRamKB = sramBytes ? (sramBytes / 1024u) : 32u;  // game-pak RAM для GSU
+        gsu_.connect(&rom_, gsuRamKB);
     }
 
     return true;
@@ -142,6 +153,12 @@ uint8_t SnesBus::read(uint32_t addr)
         return wram_[waddr];
     }
 
+    // ── SuperFX/GSU регистры $3000–$32FF ─────────────────────────────────────
+    if (hasSuperFX_ && (bank <= 0x3F || (bank >= 0x80 && bank <= 0xBF))
+        && off >= 0x3000 && off <= 0x32FF) {
+        return gsu_.readReg(off);
+    }
+
     // ── Системные регистры I/O ($2000–$5FFF в банках $00–$3F/$80–$BF) ─────────
     if ((bank <= 0x3F || (bank >= 0x80 && bank <= 0xBF)) && off >= 0x2000 && off <= 0x5FFF) {
         return readIO(off);
@@ -175,6 +192,13 @@ void SnesBus::write(uint32_t addr, uint8_t data)
     if (bank == 0x7E || bank == 0x7F) {
         uint32_t waddr = (uint32_t)((bank & 1) << 16) | off;
         wram_[waddr] = data;
+        return;
+    }
+
+    // ── SuperFX/GSU регистры $3000–$32FF ─────────────────────────────────────
+    if (hasSuperFX_ && (bank <= 0x3F || (bank >= 0x80 && bank <= 0xBF))
+        && off >= 0x3000 && off <= 0x32FF) {
+        gsu_.writeReg(off, data);
         return;
     }
 

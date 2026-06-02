@@ -235,7 +235,11 @@ uint8_t SnesPPU::readReg(uint16_t addr)
 {
     switch (addr) {
     case 0x2138: { // OAMDATAREAD
-        uint8_t v = oam_[oamAddr_ & 0x3FF];
+        // OAM = 544 байта: low table 0-511, high table 512-543 ($200-$21F).
+        // Адрес может быть до 0x3FF — приводим к валидному диапазону.
+        uint16_t oa = oamAddr_;
+        uint16_t idx = (oa < 0x200) ? oa : (uint16_t)(0x200 + (oa & 0x1F));
+        uint8_t v = oam_[idx];
         oamAddr_ = (uint16_t)((oamAddr_ + 1) & 0x3FF);
         return v;
     }

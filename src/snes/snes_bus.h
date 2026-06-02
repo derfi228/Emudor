@@ -3,6 +3,7 @@
 #include <array>
 #include <vector>
 #include <string>
+#include "superfx.h"
 
 class SnesPPU;
 class SnesAPU;
@@ -84,8 +85,18 @@ private:
     bool     hasBattery_ = false;
     bool     sramDirty_  = false;
 
+    // ─── SuperFX / GSU ────────────────────────────────────────────────────────
+    bool     hasSuperFX_ = false;
+    SuperFX  gsu_;
+
     SnesPPU* ppu_ = nullptr;
     SnesAPU* apu_ = nullptr;
+
+public:
+    // Доступ для SnesConsole: прогон GSU и наличие чипа
+    bool     hasSuperFX() const { return hasSuperFX_; }
+    void     runSuperFX(int cycles) { if (hasSuperFX_) gsu_.run(cycles); }
+private:
 
     // Контроллер: регистры $4016/$4017 (16-бит для полного SNES-геймпада)
     uint16_t ctrlShift_[2]  = {0, 0};
