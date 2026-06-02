@@ -636,23 +636,6 @@ void SnesPPU::renderScanline(int y)
     uint8_t mode   = regs_[0x05] & 0x07;
     uint8_t mainEn = regs_[0x2C];  // TM $212C: [4]=OBJ,[3]=BG4,[2]=BG3,[1]=BG2,[0]=BG1
 
-    // ── DEBUG: дамп color-math регистров на строке неба (y=40) ───────────────
-    if (y == 40 && std::getenv("EMUDOR_PPU_DUMP")) {
-        std::fprintf(stderr,
-            "[PPU y=40] mode=%d BGMODE($2105)=%02X TM($212C)=%02X TS($212D)=%02X "
-            "CGWSEL($2130)=%02X CGADSUB($2131)=%02X COLDATA=%04X "
-            "INIDISP($2100)=%02X bright=%d cgram[0]=%04X\n",
-            mode, regs_[0x05], regs_[0x2C], regs_[0x2D],
-            regs_[0x30], regs_[0x31], coldata_,
-            regs_[0x00], brightness, cgram_[0]);
-        // Что в небе на x=128? Соберём вручную BG-пиксели
-        for (int bg = 0; bg < 4; ++bg) {
-            BgPixel bp = getBGPixel(bg, 128, 40);
-            std::fprintf(stderr, "          BG%d@(128,40): color=%u prio=%d\n",
-                         bg + 1, bp.color, bp.priority);
-        }
-    }
-
     // ── Предварительный кэш спрайтов для текущего сканлайна ──────────────────
     // Вместо итерации 128 спрайтов на каждый пиксель — один проход 128 спрайтов,
     // кэшируем до 32 (лимит SNES) подходящих по Y. В пиксельном цикле только ≤32.

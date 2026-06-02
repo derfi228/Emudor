@@ -114,8 +114,8 @@ void SnesConsole::runFrame()
                 (int)cpu_.waiting_, (int)cpu_.stopped_);
     }
 
-    // ─── Диагностика: после 180 кадров — дамп в файл ─────────────────────────
-    if (++dbgFrames_ == 180) {
+    // ─── Диагностика: одноразовый дамп состояния после 180 кадров ────────────
+    if (++dbgFrames_ == 180 && std::getenv("EMUDOR_STATE_DUMP")) {
         if (FILE* f = fopen("debug_snes.txt", "w")) {
             fprintf(f, "=== SNES state after 180 frames ===\n");
             fprintf(f, "CPU: PBR=%02X PC=%04X A=%04X X=%04X Y=%04X SP=%04X P=%02X E=%d\n",

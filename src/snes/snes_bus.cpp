@@ -1,4 +1,5 @@
 // snes_bus.cpp — реализация шины памяти SNES
+#include <cstdlib>
 // 24-битное адресное пространство, поддержка LoROM / HiROM / ExHiROM.
 #include "snes_bus.h"
 #include "snes_ppu.h"
