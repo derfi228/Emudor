@@ -93,3 +93,7 @@ STATUS.md
 # nestest — public domain тест-ROM + эталонный лог для регрессии NES CPU
 !roms/nes/nestest.nes
 !roms/nes/nestest.log
+
+# Нужный скрипт сборки (не игнорировать, несмотря на *.cmake)
+!cmake/
+!cmake/copy_runtime_dlls.cmake
