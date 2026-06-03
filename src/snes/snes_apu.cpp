@@ -59,6 +59,10 @@ void SnesAPU::spcReset()
     spcSP_  = 0xEF;
     spcPSW_ = 0x02;  // Z=1
 
+    // ROMEN ($F1 бит7) на reset = 1: IPL ROM виден в $FFC0-$FFFF (как на железе).
+    // Иначе после upload в верхнюю RAM при re-entry в IPL читается мусор.
+    ram_[0x00F1] = 0x80;
+
     // Порты: при старте IPL отвечает $AA $BB
     portOut_[0] = 0xAA;
     portOut_[1] = 0xBB;
@@ -201,10 +205,6 @@ void SnesAPU::genSample()
     if (outR < -32768) outR = -32768;
     samples_.push_back((int16_t)outL);
     samples_.push_back((int16_t)outR);
-    if (std::getenv("EMUDOR_DSP_DBG")) {
-        static int nz=0,tot=0,mx=0; ++tot; int a=outL<0?-outL:outL; if(a>mx)mx=a; if(outL||outR)++nz;
-        if(tot%16000==0) fprintf(stderr,"[DSP] tot=%d nz=%d maxAmp=%d spcPC=%04X\n",tot,nz,mx,spcPC_);
-    }
 }
 
 // ─── Порты коммуникации ────────────────────────────────────────────────────────
@@ -338,12 +338,6 @@ int SnesAPU::spcStep()
         return (uint16_t)(lo | (hi << 8));
     };
 
-    if (std::getenv("EMUDOR_IPL_DBG") && (spcPC_-1)==0xFFEF) {
-        static int n=0; if(++n<=8) fprintf(stderr,"[IPL] @FFEF entry($00/01)=%02X%02X port0=%02X port1=%02X\n", ram_[1],ram_[0],portIn_[0],portIn_[1]);
-    }
-    if (std::getenv("EMUDOR_IPL_DBG") && (spcPC_-1)==0xFFFB) {
-        static int n=0; if(++n<=8) fprintf(stderr,"[IPL] @FFFB JMP X=%02X target[$00+X]=%02X%02X\n", spcX_, ram_[(spcX_+1)&0xFFFF], ram_[spcX_]);
-    }
     switch (op) {
     // ── NOP ──────────────────────────────────────────────────────────────────
     case 0x00: break;
@@ -1121,10 +1115,6 @@ int SnesAPU::spcStep()
     }
     // ── NOP-like для редких неизвестных опкодов ───────────────────────────
     default:
-        if (std::getenv("EMUDOR_SPC_DBG")) {
-            static uint8_t seen[256]={0};
-            if(!seen[op]){seen[op]=1; fprintf(stderr,"[SPC] unimpl $%02X at PC=%04X\n",op,(uint16_t)(spcPC_-1));}
-        }
         break;
     }
     return 2;   // аппроксимация: средняя инструкция SPC700 ≈ 2 такта

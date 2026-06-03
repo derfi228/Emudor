@@ -110,12 +110,6 @@ void SnesConsole::runFrame()
     // Догоняем SPC700 до конца кадра (исполняем остаток накопленного бюджета).
     apu_.flush();
 
-    // ─── Диагностика: SPC PC по кадрам ───────────────────────────────────────
-    if (std::getenv("EMUDOR_SPC_PC")) {
-        fprintf(stderr, "f=%d SPC_PC=%04X out=%02X %02X %02X %02X\n", dbgFrames_,
-                apu_.dbgSpcPC(), apu_.dbgPort(0), apu_.dbgPort(1), apu_.dbgPort(2), apu_.dbgPort(3));
-    }
-
     // ─── Диагностика: трассировка CPU PC каждый кадр (EMUDOR_CPU_TRACE) ──────
     if (std::getenv("EMUDOR_CPU_TRACE")) {
         fprintf(stderr, "f=%d PBR:PC=%02X:%04X A=%04X X=%04X Y=%04X SP=%04X P=%02X wait=%d stop=%d\n",
