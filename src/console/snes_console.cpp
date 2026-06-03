@@ -54,7 +54,6 @@ void SnesConsole::runFrame()
     bus_.setVBlankActive(false);
 
     int cpuAcc = 0;
-    int apuAcc = 0;
 
     for (int dot = 0; dot < FRAME_DOTS; ++dot) {
         // ── PPU ──────────────────────────────────────────────────────────────
@@ -79,11 +78,9 @@ void SnesConsole::runFrame()
             if (!cpu_.stopped_ && !cpu_.waiting_) cpu_.clock();
         }
 
-        // ── APU: 1 тик каждые 4 PPU дота (CPU:APU ≈ 2:1 — ускоренный для быстрой загрузки SPC700)
-        if (++apuAcc >= 4) {
-            apuAcc = 0;
-            apu_.clock();
-        }
+        // ── APU: накапливаем бюджет тактов SPC каждый дот (cycle-accurate).
+        // Реальное исполнение (flush) — на доступах к портам и в конце кадра.
+        apu_.addCycles(SnesAPU::SPC_PER_DOT);
 
         // ── HDMA: раз в сканлайн ──────────────────────────────────────────────
         if (dot > 0 && dot % 341 == 0) {
@@ -109,6 +106,9 @@ void SnesConsole::runFrame()
 
     // VBlank завершился, сбрасываем флаг
     bus_.setVBlankActive(false);
+
+    // Догоняем SPC700 до конца кадра (исполняем остаток накопленного бюджета).
+    apu_.flush();
 
     // ─── Диагностика: трассировка CPU PC каждый кадр (EMUDOR_CPU_TRACE) ──────
     if (std::getenv("EMUDOR_CPU_TRACE")) {

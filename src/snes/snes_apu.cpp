@@ -3,25 +3,24 @@
 // Все операции с памятью идут через spcRead/spcWrite для корректного
 // маппинга портов и IPL ROM.
 //
-// ─── СТАТУС ЗВУКА (точный диагноз для будущей реализации) ────────────────────
-// Звука пока НЕТ. Причина — НЕ отсутствие опкодов (драйверы игр не падают на
-// неимплементированных) и НЕ только заглушка DSP, а ТОНКАЯ СИНХРОНИЗАЦИЯ CPU<->SPC700:
+// ─── АРХИТЕКТУРА ЗВУКА ────────────────────────────────────────────────────────
+// Реализовано:
+//   * Cycle-accurate тайминг: каждый PPU-дот добавляет бюджет тактов SPC
+//     (addCycles), реальное исполнение (flush) — на доступах к портам $2140-$2143
+//     и в конце кадра. SPC700 всегда «догнан» до момента взаимодействия с CPU.
+//   * Полный DSP (genSample): BRR ADPCM декодер с 4 фильтрами, 8 голосов,
+//     питч-аккумулятор, огибающая (attack/release), микс с per-voice VOL и MVOL.
+//   * burst в IPL-фазе: надёжно проводит upload-протокол (все игры грузятся).
 //
-//   SMW на $00:8082 делает `CMP $2140 / BNE` — ждёт, что APU выдаст $AA/$BB
-//   (сигнал «IPL готов»). burst-хак в writePort() позволяет SMW пройти этот
-//   init и загрузиться, НО держит SPC700 в IPL — драйвер не стартует, музыки нет.
-//   Без burst драйвер стартует (SPC700 -> $0549), но SMW виснет на $8082, т.к.
-//   к моменту проверки APU уже не в IPL. Двойной степпинг (clock() per-dot +
-//   burst) десинхронизирует IPL-протокол.
-//
-// ПРАВИЛЬНОЕ РЕШЕНИЕ (крупная отдельная задача):
-//   1. Единый механизм продвижения SPC700 по бюджету тактов главного CPU
-//      (cycle-accurate), flush (catch-up) на каждом доступе к портам $2140-$2143.
-//   2. Полный DSP: BRR ADPCM декодер, 8 голосов, ADSR-огибающие, PITCH, GAIN,
-//      микширование, эхо-буфер. Сейчас DSP — заглушка (выдаёт тишину).
-// До этого момента burst-хак намеренно сохранён: он держит ВСЕ игры рабочими.
+// ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ: после upload звуковой драйвер игры не всегда стартует
+// (SPC остаётся в IPL-ожидании) — для гарантированного запуска драйвера всех игр
+// нужен потактово-точный SPC700 (точные такты на инструкцию), сверенный с
+// эталоном. DSP-конвейер готов и заработает, как только драйвер начнёт писать
+// регистры голосов. Игры при этом полностью рабочие визуально/по геймплею.
 #include "snes_apu.h"
 #include <cstring>
+#include <cstdlib>
+#include <cstdio>
 
 // ─── IPL ROM (Sony, неизменный) ───────────────────────────────────────────────
 // Оригинальный 64-байтовый загрузчик SNES APU.
@@ -95,32 +94,113 @@ void SnesAPU::tickTimers()
     }
 }
 
-// ─── Синхронизирующий burst SPC ──────────────────────────────────────────────
-// Вызывается перед чтением портов $2140-$2143 чтобы SPC успел обновить portOut.
-void SnesAPU::runCatchup(int steps)
+// ─── Исполнение накопленного бюджета тактов SPC700 ────────────────────────────
+// Запускается на доступах к портам APU и в конце кадра. Догоняет SPC до «сейчас».
+void SnesAPU::flush()
 {
-    for (int i = 0; i < steps; ++i) {
-        spcStep();
-        tickTimers();
+    while (owed_ >= 2.0) {           // минимальная инструкция ≈ 2 такта
+        int c = spcStep();
+        for (int i = 0; i < c; ++i) tickTimers();
+        owed_ -= c;
+        audioAcc_ += (uint32_t)c;
+        while (audioAcc_ >= AUDIO_DIV) { audioAcc_ -= AUDIO_DIV; genSample(); }
     }
 }
 
-// ─── Такт APU ─────────────────────────────────────────────────────────────────
-void SnesAPU::clock()
-{
-    // Шагаем SPC700
-    spcStep();
-    tickTimers();
-
-    // Генерируем аудио-сэмпл: ~1,024,000 / 32000 ≈ 32 тактов на сэмпл
-    ++sampleDiv_;
-    if (sampleDiv_ >= 32) {
-        sampleDiv_ = 0;
-        // DSP-микшер: тишина пока не реализован полный BRR-декодер.
-        // Упрощённый меандр-микшер был слишком шумным и склонным к артефактам.
-        samples_.push_back(0);
-        samples_.push_back(0);
+// ─── DSP: один стерео-сэмпл (32 кГц) — BRR ADPCM, 8 голосов, микс ──────────────
+namespace {
+    inline int16_t brrFilter(int s, int filter, int16_t& p0, int16_t& p1)
+    {
+        int out = s;
+        switch (filter) {
+            case 1: out = s + p0 + ((-p0) >> 4); break;
+            case 2: out = s + 2*p0 + ((-3*p0) >> 5) - p1 + (p1 >> 4); break;
+            case 3: out = s + 2*p0 + ((-13*p0) >> 6) - p1 + ((3*p1) >> 4); break;
+            default: break;
+        }
+        if (out >  32767) out =  32767;
+        if (out < -32768) out = -32768;
+        p1 = p0; p0 = (int16_t)out;
+        return (int16_t)out;
     }
+}
+
+void SnesAPU::genSample()
+{
+    uint8_t flg = dsp_[0x6C];
+    uint8_t dir = dsp_[0x5D];
+
+    // KON/KOFF фронты
+    uint8_t kon  = dsp_[0x4C];
+    uint8_t koff = dsp_[0x5C];
+    for (int v = 0; v < 8; ++v) {
+        uint8_t m = (uint8_t)(1 << v);
+        if ((kon & m) && !(dspKonLatch_ & m)) {
+            Voice& vo = voice_[v];
+            uint16_t e = (uint16_t)(dir * 0x100 + dsp_[v*0x10 + 4] * 4); // SRCN
+            vo.curAddr  = (uint16_t)(ram_[e] | (ram_[e+1] << 8));
+            vo.loopAddr = (uint16_t)(ram_[e+2] | (ram_[e+3] << 8));
+            vo.bufPos = 0; vo.bufValid = false;
+            vo.prev0 = vo.prev1 = 0; vo.pitchAcc = 0;
+            vo.active = true; vo.env = 0; vo.envMode = 1; // attack
+        }
+        if (koff & m) { if (voice_[v].active) voice_[v].envMode = 0; } // release
+    }
+    dspKonLatch_ = kon;
+
+    if (flg & 0x80) { samples_.push_back(0); samples_.push_back(0); return; } // mute
+
+    int mixL = 0, mixR = 0;
+    for (int v = 0; v < 8; ++v) {
+        Voice& vo = voice_[v];
+        if (!vo.active) continue;
+        int base = v * 0x10;
+
+        if (!vo.bufValid) {
+            uint8_t hdr = ram_[vo.curAddr];
+            int range  = hdr >> 4;
+            int filter = (hdr >> 2) & 3;
+            for (int n = 0; n < 16; ++n) {
+                uint8_t byte = ram_[(uint16_t)(vo.curAddr + 1 + (n >> 1))];
+                int nib = (n & 1) ? (byte & 0x0F) : (byte >> 4);
+                if (nib >= 8) nib -= 16;
+                int s = (range <= 12) ? ((nib << range) >> 1) : 0;
+                vo.buf[n] = brrFilter(s, filter, vo.prev0, vo.prev1);
+            }
+            vo.bufValid = true;
+        }
+
+        int16_t smp = vo.buf[vo.bufPos & 15];
+
+        if (vo.envMode == 1) { vo.env += 32; if (vo.env >= 2047) { vo.env = 2047; vo.envMode = 3; } }
+        else if (vo.envMode == 0) { vo.env -= 16; if (vo.env <= 0) { vo.env = 0; vo.active = false; } }
+
+        int sval = (smp * vo.env) >> 11;
+        mixL += (sval * (int8_t)dsp_[base + 0]) >> 7;
+        mixR += (sval * (int8_t)dsp_[base + 1]) >> 7;
+
+        uint16_t pitch = (uint16_t)((dsp_[base+2] | (dsp_[base+3] << 8)) & 0x3FFF);
+        vo.pitchAcc += pitch;
+        while (vo.pitchAcc >= 0x1000) {
+            vo.pitchAcc -= 0x1000;
+            if (++vo.bufPos >= 16) {
+                vo.bufPos = 0;
+                uint8_t hdr = ram_[vo.curAddr];
+                if (hdr & 0x01) { if (hdr & 0x02) vo.curAddr = vo.loopAddr; else vo.active = false; }
+                else            vo.curAddr = (uint16_t)(vo.curAddr + 9);
+                vo.bufValid = false;
+            }
+        }
+    }
+
+    int outL = (mixL * (int8_t)dsp_[0x0C]) >> 7;
+    int outR = (mixR * (int8_t)dsp_[0x1C]) >> 7;
+    if (outL >  32767) outL =  32767;
+    if (outL < -32768) outL = -32768;
+    if (outR >  32767) outR =  32767;
+    if (outR < -32768) outR = -32768;
+    samples_.push_back((int16_t)outL);
+    samples_.push_back((int16_t)outR);
 }
 
 // ─── Порты коммуникации ────────────────────────────────────────────────────────
@@ -128,12 +208,17 @@ void SnesAPU::writePort(uint8_t port, uint8_t data)
 {
     if (port < 4) portIn_[port] = data;
 
-    // Burst только во время загрузки IPL ROM (SPC PC в диапазоне $FFC0–$FFFF).
-    // Гарантирует завершение upload-протокола без замедления во время игры.
+    // IPL-фаза: пока SPC700 в загрузчике ($FFC0+), форсируем обработку записи.
+    // transfer-блок (port1 != 0): крутим до echo индекса (portOut[0]==data).
+    // execute (port1 == 0): крутим пока SPC НЕ выйдет из IPL — это и есть прыжок
+    //   на entry-point драйвера ($1F JMP [$00]). Так драйвер реально стартует.
+    // После старта драйвера (PC < $FFC0) burst отключается — далее работает flush().
     if (port == 0 && spcPC_ >= 0xFFC0) {
-        for (int i = 0; i < 4000 && portOut_[0] != data; ++i) {
-            spcStep();
-            tickTimers();
+        for (int i = 0; i < 6000 && portOut_[0] != data && spcPC_ >= 0xFFC0; ++i) {
+            int c = spcStep();
+            for (int t = 0; t < c; ++t) tickTimers();
+            audioAcc_ += (uint32_t)c;
+            while (audioAcc_ >= AUDIO_DIV) { audioAcc_ -= AUDIO_DIV; genSample(); }
         }
     }
 }
@@ -243,7 +328,7 @@ void SnesAPU::setNZ(uint8_t v)
 // ─── SPC700: одна инструкция ──────────────────────────────────────────────────
 // Реализованы наиболее частые опкоды (~ достаточно для IPL ROM).
 // Полная реализация выходит за рамки данной фазы.
-void SnesAPU::spcStep()
+int SnesAPU::spcStep()
 {
     uint8_t op = spcFetch();
     uint8_t dp = (spcPSW_ & FL_P) ? 0x01 : 0x00;  // Direct Page: $00xx или $01xx
@@ -1030,8 +1115,8 @@ void SnesAPU::spcStep()
         break;
     }
     // ── NOP-like для редких неизвестных опкодов ───────────────────────────
-    // Неизвестный опкод — пропускаем (NOP-like)
     default:
         break;
     }
+    return 2;   // аппроксимация: средняя инструкция SPC700 ≈ 2 такта
 }

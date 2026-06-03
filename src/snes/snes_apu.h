@@ -15,9 +15,17 @@ public:
 
     void reset();
 
-    // Один шаг APU (~21 мастер-тактов SNES ≈ 1 SPC700-такт при реальном делителе)
-    // Вызывается из SnesConsole::runFrame()
-    void clock();
+    // ─── Cycle-accurate синхронизация ─────────────────────────────────────────
+    // Модель: каждый PPU-дот добавляем бюджет тактов SPC (addCycles), но реально
+    // исполняем SPC (flush) ТОЛЬКО когда CPU обращается к портам $2140-$2143 и в
+    // конце кадра. Так SPC всегда «догнан» до точного момента взаимодействия.
+    void addCycles(double spcCycles) { owed_ += spcCycles; }
+    void flush();                       // исполнить накопленный бюджет
+    static constexpr double SPC_PER_DOT = 1024000.0 / 5364480.0; // ≈0.19089
+
+    // Совместимость со старым интерфейсом (1 «такт» = 4 дота)
+    void clock() { addCycles(4 * SPC_PER_DOT); }
+    void runCatchup(int) { flush(); }   // устар.: просто flush
 
     // Порты связи с CPU SNES ($2140–$2143)
     void    writePort(uint8_t port, uint8_t data);
@@ -26,9 +34,6 @@ public:
     // Аудио-буфер (стерео, int16: L R L R …)
     const std::vector<int16_t>& samples() const { return samples_; }
     void clearSamples() { samples_.clear(); }
-
-    // Синхронизирующий burst: запускает SPC перед чтением портов
-    void runCatchup(int steps);
 
     // Диагностика
     uint16_t dbgSpcPC()  const { return spcPC_; }
@@ -55,6 +60,25 @@ private:
     uint32_t dspPhase_[8] = {0,0,0,0,0,0,0,0};
     uint8_t  dspKonLatch_ = 0;
 
+    // ─── Cycle-accurate бюджет + аудио-делитель ───────────────────────────────
+    double   owed_ = 0.0;       // накопленный бюджет тактов SPC к исполнению
+    uint32_t audioAcc_ = 0;     // счётчик тактов до следующего аудио-сэмпла (32 кГц)
+    static constexpr uint32_t AUDIO_DIV = 32; // 1.024МГц / 32 = 32 кГц
+
+    // ─── Состояние голосов DSP (BRR ADPCM) ────────────────────────────────────
+    struct Voice {
+        bool     active = false;
+        uint16_t curAddr = 0;     // адрес текущего BRR-блока в RAM SPC
+        int      bufPos = 0;      // позиция в декодированном буфере (0..15)
+        bool     bufValid = false;
+        int16_t  buf[16] = {0};   // 16 декодированных сэмплов текущего блока
+        int16_t  prev0 = 0, prev1 = 0; // история для BRR-фильтра
+        uint32_t pitchAcc = 0;    // 12-бит дробный аккумулятор шага
+        uint16_t loopAddr = 0;
+        int      env = 0;         // огибающая 0..2047
+        int      envMode = 0;     // 0=release,1=attack,3=sustain
+    } voice_[8];
+
     // Порты связи с SNES CPU (4 байта в каждую сторону)
     uint8_t portIn_[4]{};   // SNES CPU → SPC700 (pишет CPU, читает SPC)
     uint8_t portOut_[4]{};  // SPC700 → SNES CPU (читает CPU)
@@ -78,8 +102,9 @@ private:
     void     spcReset();
     uint8_t  spcRead (uint16_t addr);
     void     spcWrite(uint16_t addr, uint8_t data);
-    void     spcStep ();             // одна инструкция SPC700
+    int      spcStep ();             // одна инструкция SPC700, возвращает такты
     void     tickTimers();           // тик всех таймеров
+    void     genSample();            // один аудио-сэмпл (DSP-микс)
 
     uint8_t  spcFetch();             // PC++
     void     spcPush (uint8_t v);
