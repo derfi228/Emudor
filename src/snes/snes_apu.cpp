@@ -338,6 +338,56 @@ int SnesAPU::spcStep()
         return (uint16_t)(lo | (hi << 8));
     };
 
+    // ── ADC/SBC: общие хелперы с ПОЛНЫМ набором флагов (N V H Z C) ────────────
+    // H (half-carry) — перенос/заём между битом 3 и 4. SBC реализуем как
+    // сложение с дополнением (~b), что даёт корректные C/V/H единообразно.
+    auto adc8 = [&](uint8_t a, uint8_t b) -> uint8_t {
+        uint8_t cin = (spcPSW_ & FL_C) ? 1 : 0;
+        uint16_t r = (uint16_t)(a + b + cin);
+        uint8_t  res = (uint8_t)r;
+        spcPSW_ &= (uint8_t)~(FL_N | FL_V | FL_H | FL_Z | FL_C);
+        if (r > 0xFF)                       spcPSW_ |= FL_C;
+        if (res == 0)                       spcPSW_ |= FL_Z;
+        if (res & 0x80)                     spcPSW_ |= FL_N;
+        if ((a ^ b ^ res) & 0x10)           spcPSW_ |= FL_H;
+        if ((a ^ res) & (b ^ res) & 0x80)   spcPSW_ |= FL_V;
+        return res;
+    };
+    auto sbc8 = [&](uint8_t a, uint8_t b) -> uint8_t {
+        uint8_t  nb  = (uint8_t)~b;
+        uint8_t  cin = (spcPSW_ & FL_C) ? 1 : 0;
+        uint16_t r   = (uint16_t)(a + nb + cin);
+        uint8_t  res = (uint8_t)r;
+        spcPSW_ &= (uint8_t)~(FL_N | FL_V | FL_H | FL_Z | FL_C);
+        if (r > 0xFF)                       spcPSW_ |= FL_C;   // нет заёма
+        if (res == 0)                       spcPSW_ |= FL_Z;
+        if (res & 0x80)                     spcPSW_ |= FL_N;
+        if ((a ^ nb ^ res) & 0x10)          spcPSW_ |= FL_H;
+        if ((a ^ res) & (nb ^ res) & 0x80)  spcPSW_ |= FL_V;
+        return res;
+    };
+    // CMP: a - b, влияет только на N Z C (без V, без H)
+    auto cmp8 = [&](uint8_t a, uint8_t b) {
+        uint8_t r = (uint8_t)(a - b);
+        spcPSW_ &= (uint8_t)~(FL_N | FL_Z | FL_C);
+        if (a >= b)   spcPSW_ |= FL_C;
+        if (r == 0)   spcPSW_ |= FL_Z;
+        if (r & 0x80) spcPSW_ |= FL_N;
+    };
+    // ── Хелперы адресации (читают операнд из потока кода) ────────────────────
+    auto aDpX  = [&]() -> uint16_t { return dpAddr((uint8_t)(spcFetch() + spcX_)); };
+    auto aAbsX = [&]() -> uint16_t { return (uint16_t)(absAddr() + spcX_); };
+    auto aAbsY = [&]() -> uint16_t { return (uint16_t)(absAddr() + spcY_); };
+    auto aIndX = [&]() -> uint16_t {          // [dp+X]
+        uint8_t d = (uint8_t)(spcFetch() + spcX_);
+        return (uint16_t)(spcRead(dpAddr(d)) | (spcRead(dpAddr((uint8_t)(d+1))) << 8));
+    };
+    auto aIndY = [&]() -> uint16_t {          // [dp]+Y
+        uint8_t d = spcFetch();
+        uint16_t base = (uint16_t)(spcRead(dpAddr(d)) | (spcRead(dpAddr((uint8_t)(d+1))) << 8));
+        return (uint16_t)(base + spcY_);
+    };
+
     switch (op) {
     // ── NOP ──────────────────────────────────────────────────────────────────
     case 0x00: break;
@@ -415,31 +465,56 @@ int SnesAPU::spcStep()
     case 0xEE: spcY_   = spcPop(); break;
     case 0x8E: spcPSW_ = spcPop(); break;
 
-    // ── ADC A, #imm ──────────────────────────────────────────────────────────
-    case 0x88: {
-        uint8_t imm = spcFetch();
-        uint16_t r = (uint16_t)(spcA_ + imm + (spcPSW_ & FL_C));
-        spcPSW_ = (uint8_t)((spcPSW_ & ~(FL_N|FL_V|FL_H|FL_Z|FL_C))
-            | (r > 0xFF  ? FL_C : 0)
-            | ((r & 0xFF) == 0 ? FL_Z : 0)
-            | (r & 0x80 ? FL_N : 0)
-            | (((spcA_ ^ r) & (imm ^ r) & 0x80) ? FL_V : 0));
-        spcA_ = (uint8_t)r;
-        break;
-    }
+    // ── ADC A, #imm ($88) ────────────────────────────────────────────────────
+    case 0x88: { uint8_t imm = spcFetch(); spcA_ = adc8(spcA_, imm); break; }
+    // ── ADC A, dp+X ($94) ────────────────────────────────────────────────────
+    case 0x94: { uint8_t d = spcFetch(); spcA_ = adc8(spcA_, spcRead(dpAddr((uint8_t)(d+spcX_)))); break; }
+    // ── ADC A, abs ($85) ─────────────────────────────────────────────────────
+    case 0x85: { uint16_t a = absAddr(); spcA_ = adc8(spcA_, spcRead(a)); break; }
+    // ── ADC A, abs+X ($95) ───────────────────────────────────────────────────
+    case 0x95: { uint16_t a = (uint16_t)(absAddr()+spcX_); spcA_ = adc8(spcA_, spcRead(a)); break; }
+    // ── ADC A, abs+Y ($96) ───────────────────────────────────────────────────
+    case 0x96: { uint16_t a = (uint16_t)(absAddr()+spcY_); spcA_ = adc8(spcA_, spcRead(a)); break; }
+    // ── ADC A, (X) ($86) ─────────────────────────────────────────────────────
+    case 0x86: { spcA_ = adc8(spcA_, spcRead(dpAddr(spcX_))); break; }
+    // ── ADC A, [dp+X] ($87) ──────────────────────────────────────────────────
+    case 0x87: { uint8_t d=(uint8_t)(spcFetch()+spcX_);
+        uint16_t a=(uint16_t)(spcRead(dpAddr(d))|(spcRead(dpAddr((uint8_t)(d+1)))<<8));
+        spcA_ = adc8(spcA_, spcRead(a)); break; }
+    // ── ADC A, [dp]+Y ($97) ──────────────────────────────────────────────────
+    case 0x97: { uint8_t d=spcFetch();
+        uint16_t a=(uint16_t)((spcRead(dpAddr(d))|(spcRead(dpAddr((uint8_t)(d+1)))<<8))+spcY_);
+        spcA_ = adc8(spcA_, spcRead(a)); break; }
+    // ── ADC (X),(Y) ($99) ────────────────────────────────────────────────────
+    case 0x99: { uint16_t ax=dpAddr(spcX_); uint8_t r=adc8(spcRead(ax), spcRead(dpAddr(spcY_)));
+        spcWrite(ax, r); break; }
 
-    // ── SBC A, #imm ──────────────────────────────────────────────────────────
-    case 0xA8: {
-        uint8_t imm = spcFetch();
-        uint16_t r = (uint16_t)(spcA_ - imm - !(spcPSW_ & FL_C));
-        spcPSW_ = (uint8_t)((spcPSW_ & ~(FL_N|FL_V|FL_H|FL_Z|FL_C))
-            | (spcA_ >= (uint16_t)(imm + !(spcPSW_&FL_C)) ? FL_C : 0)
-            | ((r & 0xFF) == 0 ? FL_Z : 0)
-            | (r & 0x80 ? FL_N : 0)
-            | (((spcA_ ^ imm) & (spcA_ ^ r) & 0x80) ? FL_V : 0));
-        spcA_ = (uint8_t)r;
-        break;
-    }
+    // ── SBC A, #imm ($A8) ────────────────────────────────────────────────────
+    case 0xA8: { uint8_t imm = spcFetch(); spcA_ = sbc8(spcA_, imm); break; }
+    // ── SBC A, dp+X ($B4) ────────────────────────────────────────────────────
+    case 0xB4: { uint8_t d = spcFetch(); spcA_ = sbc8(spcA_, spcRead(dpAddr((uint8_t)(d+spcX_)))); break; }
+    // ── SBC A, abs ($A5) ─────────────────────────────────────────────────────
+    case 0xA5: { uint16_t a = absAddr(); spcA_ = sbc8(spcA_, spcRead(a)); break; }
+    // ── SBC A, abs+X ($B5) ───────────────────────────────────────────────────
+    case 0xB5: { uint16_t a = (uint16_t)(absAddr()+spcX_); spcA_ = sbc8(spcA_, spcRead(a)); break; }
+    // ── SBC A, abs+Y ($B6) ───────────────────────────────────────────────────
+    case 0xB6: { uint16_t a = (uint16_t)(absAddr()+spcY_); spcA_ = sbc8(spcA_, spcRead(a)); break; }
+    // ── SBC A, (X) ($A6) ─────────────────────────────────────────────────────
+    case 0xA6: { spcA_ = sbc8(spcA_, spcRead(dpAddr(spcX_))); break; }
+    // ── SBC A, [dp+X] ($A7) ──────────────────────────────────────────────────
+    case 0xA7: { uint8_t d=(uint8_t)(spcFetch()+spcX_);
+        uint16_t a=(uint16_t)(spcRead(dpAddr(d))|(spcRead(dpAddr((uint8_t)(d+1)))<<8));
+        spcA_ = sbc8(spcA_, spcRead(a)); break; }
+    // ── SBC A, [dp]+Y ($B7) ──────────────────────────────────────────────────
+    case 0xB7: { uint8_t d=spcFetch();
+        uint16_t a=(uint16_t)((spcRead(dpAddr(d))|(spcRead(dpAddr((uint8_t)(d+1)))<<8))+spcY_);
+        spcA_ = sbc8(spcA_, spcRead(a)); break; }
+    // ── SBC (X),(Y) ($B9) ────────────────────────────────────────────────────
+    case 0xB9: { uint16_t ax=dpAddr(spcX_); uint8_t r=sbc8(spcRead(ax), spcRead(dpAddr(spcY_)));
+        spcWrite(ax, r); break; }
+    // ── SBC dp, #imm ($B8) ───────────────────────────────────────────────────
+    case 0xB8: { uint8_t imm=spcFetch(); uint8_t d=spcFetch(); uint16_t a=dpAddr(d);
+        spcWrite(a, sbc8(spcRead(a), imm)); break; }
 
     // ── CMP A, #imm ──────────────────────────────────────────────────────────
     case 0x68: {
@@ -499,9 +574,29 @@ int SnesAPU::spcStep()
         uint8_t d = spcFetch(); uint16_t a = dpAddr(d);
         uint8_t v = (uint8_t)(spcRead(a) + 1); spcWrite(a, v); setNZ(v); break;
     }
+    // ── INC dp+X ($BB) ─────────────────────────────────────────────────────
+    case 0xBB: {
+        uint16_t a = dpAddr((uint8_t)(spcFetch() + spcX_));
+        uint8_t v = (uint8_t)(spcRead(a) + 1); spcWrite(a, v); setNZ(v); break;
+    }
+    // ── INC abs ($AC) ──────────────────────────────────────────────────────
+    case 0xAC: {
+        uint16_t a = absAddr();
+        uint8_t v = (uint8_t)(spcRead(a) + 1); spcWrite(a, v); setNZ(v); break;
+    }
     // ── DEC dp ───────────────────────────────────────────────────────────────
     case 0x8B: {
         uint8_t d = spcFetch(); uint16_t a = dpAddr(d);
+        uint8_t v = (uint8_t)(spcRead(a) - 1); spcWrite(a, v); setNZ(v); break;
+    }
+    // ── DEC dp+X ($9B) ─────────────────────────────────────────────────────
+    case 0x9B: {
+        uint16_t a = dpAddr((uint8_t)(spcFetch() + spcX_));
+        uint8_t v = (uint8_t)(spcRead(a) - 1); spcWrite(a, v); setNZ(v); break;
+    }
+    // ── DEC abs ($8C) ──────────────────────────────────────────────────────
+    case 0x8C: {
+        uint16_t a = absAddr();
         uint8_t v = (uint8_t)(spcRead(a) - 1); spcWrite(a, v); setNZ(v); break;
     }
 
@@ -772,14 +867,7 @@ int SnesAPU::spcStep()
     case 0x98: {
         uint8_t imm = spcFetch(); uint8_t d = spcFetch();
         uint16_t a = dpAddr(d);
-        uint8_t  v = spcRead(a);
-        uint16_t r = (uint16_t)(v + imm + (spcPSW_ & FL_C));
-        spcPSW_ = (uint8_t)((spcPSW_ & ~(FL_N|FL_V|FL_H|FL_Z|FL_C))
-            | (r > 0xFF ? FL_C : 0)
-            | ((r&0xFF)==0 ? FL_Z : 0)
-            | (r & 0x80 ? FL_N : 0)
-            | (((v^r)&(imm^r)&0x80) ? FL_V : 0));
-        spcWrite(a, (uint8_t)r);
+        spcWrite(a, adc8(spcRead(a), imm));
         break;
     }
 
@@ -926,24 +1014,9 @@ int SnesAPU::spcStep()
     // ── EOR A, dp ($44) ──────────────────────────────────────────────────────
     case 0x44: { uint8_t d = spcFetch(); spcA_ ^= spcRead(dpAddr(d)); setNZ(spcA_); break; }
     // ── ADC A, dp ($84) ──────────────────────────────────────────────────────
-    case 0x84: {
-        uint8_t d = spcFetch(); uint8_t v = spcRead(dpAddr(d));
-        uint16_t r = (uint16_t)(spcA_ + v + (spcPSW_ & FL_C));
-        spcPSW_ = (uint8_t)((spcPSW_ & ~(FL_N|FL_V|FL_H|FL_Z|FL_C))
-            | (r > 0xFF ? FL_C : 0) | ((r&0xFF)==0 ? FL_Z : 0) | (r&0x80 ? FL_N : 0)
-            | (((spcA_^r)&(v^r)&0x80) ? FL_V : 0));
-        spcA_ = (uint8_t)r; break;
-    }
+    case 0x84: { uint8_t d = spcFetch(); spcA_ = adc8(spcA_, spcRead(dpAddr(d))); break; }
     // ── SBC A, dp ($A4) ──────────────────────────────────────────────────────
-    case 0xA4: {
-        uint8_t d = spcFetch(); uint8_t v = spcRead(dpAddr(d));
-        uint16_t r = (uint16_t)(spcA_ - v - !(spcPSW_ & FL_C));
-        spcPSW_ = (uint8_t)((spcPSW_ & ~(FL_N|FL_V|FL_H|FL_Z|FL_C))
-            | (spcA_ >= (uint16_t)(v + !(spcPSW_&FL_C)) ? FL_C : 0)
-            | ((r&0xFF)==0 ? FL_Z : 0) | (r&0x80 ? FL_N : 0)
-            | (((spcA_^v)&(spcA_^r)&0x80) ? FL_V : 0));
-        spcA_ = (uint8_t)r; break;
-    }
+    case 0xA4: { uint8_t d = spcFetch(); spcA_ = sbc8(spcA_, spcRead(dpAddr(d))); break; }
 
     // ── ASL dp ($0B) ─────────────────────────────────────────────────────────
     case 0x0B: {
@@ -1063,21 +1136,12 @@ int SnesAPU::spcStep()
     // ── ADC dp, dp ($89) / SBC dp, dp ($A9) ───────────────────────────────
     case 0x89: {
         uint8_t s = spcFetch(); uint8_t d = spcFetch();
-        uint8_t vs = spcRead(dpAddr(s)); uint8_t vd = spcRead(dpAddr(d));
-        uint16_t r = (uint16_t)(vd + vs + (spcPSW_ & FL_C));
-        spcPSW_ = (uint8_t)((spcPSW_ & ~(FL_N|FL_V|FL_H|FL_Z|FL_C))
-            | (r > 0xFF ? FL_C : 0) | ((r & 0xFF) == 0 ? FL_Z : 0) | (r & 0x80 ? FL_N : 0));
-        spcWrite(dpAddr(d), (uint8_t)r);
+        spcWrite(dpAddr(d), adc8(spcRead(dpAddr(d)), spcRead(dpAddr(s))));
         break;
     }
     case 0xA9: {
         uint8_t s = spcFetch(); uint8_t d = spcFetch();
-        uint8_t vs = spcRead(dpAddr(s)); uint8_t vd = spcRead(dpAddr(d));
-        uint16_t r = (uint16_t)(vd - vs - !(spcPSW_ & FL_C));
-        spcPSW_ = (uint8_t)((spcPSW_ & ~(FL_N|FL_V|FL_H|FL_Z|FL_C))
-            | (vd >= (uint16_t)(vs + !(spcPSW_ & FL_C)) ? FL_C : 0)
-            | ((r & 0xFF) == 0 ? FL_Z : 0) | (r & 0x80 ? FL_N : 0));
-        spcWrite(dpAddr(d), (uint8_t)r);
+        spcWrite(dpAddr(d), sbc8(spcRead(dpAddr(d)), spcRead(dpAddr(s))));
         break;
     }
     // ── OR/AND/EOR/CMP/ADC/SBC (X),(Y) ─────────────────────────────────────
@@ -1113,6 +1177,49 @@ int SnesAPU::spcStep()
         spcPC_ = (uint16_t)(lo | (hi << 8));
         break;
     }
+    // ── ORA A, addr (недостающие режимы адресации) ────────────────────────
+    case 0x14: spcA_ |= spcRead(aDpX());  setNZ(spcA_); break; // ORA A,dp+X
+    case 0x05: spcA_ |= spcRead(absAddr()); setNZ(spcA_); break; // ORA A,abs
+    case 0x15: spcA_ |= spcRead(aAbsX()); setNZ(spcA_); break; // ORA A,abs+X
+    case 0x16: spcA_ |= spcRead(aAbsY()); setNZ(spcA_); break; // ORA A,abs+Y
+    case 0x06: spcA_ |= spcRead(dpAddr(spcX_)); setNZ(spcA_); break; // ORA A,(X)
+    case 0x07: spcA_ |= spcRead(aIndX()); setNZ(spcA_); break; // ORA A,[dp+X]
+    case 0x17: spcA_ |= spcRead(aIndY()); setNZ(spcA_); break; // ORA A,[dp]+Y
+    case 0x09: { uint8_t s=spcFetch(); uint8_t d=spcFetch();   // ORA dp,dp
+        uint8_t r=(uint8_t)(spcRead(dpAddr(d))|spcRead(dpAddr(s))); spcWrite(dpAddr(d),r); setNZ(r); break; }
+
+    // ── AND A, addr (недостающие режимы адресации) ────────────────────────
+    case 0x34: spcA_ &= spcRead(aDpX());  setNZ(spcA_); break; // AND A,dp+X
+    case 0x25: spcA_ &= spcRead(absAddr()); setNZ(spcA_); break; // AND A,abs
+    case 0x35: spcA_ &= spcRead(aAbsX()); setNZ(spcA_); break; // AND A,abs+X
+    case 0x36: spcA_ &= spcRead(aAbsY()); setNZ(spcA_); break; // AND A,abs+Y
+    case 0x26: spcA_ &= spcRead(dpAddr(spcX_)); setNZ(spcA_); break; // AND A,(X)
+    case 0x27: spcA_ &= spcRead(aIndX()); setNZ(spcA_); break; // AND A,[dp+X]
+    case 0x37: spcA_ &= spcRead(aIndY()); setNZ(spcA_); break; // AND A,[dp]+Y
+    case 0x29: { uint8_t s=spcFetch(); uint8_t d=spcFetch();   // AND dp,dp
+        uint8_t r=(uint8_t)(spcRead(dpAddr(d))&spcRead(dpAddr(s))); spcWrite(dpAddr(d),r); setNZ(r); break; }
+
+    // ── EOR A, addr (недостающие режимы адресации) ────────────────────────
+    case 0x54: spcA_ ^= spcRead(aDpX());  setNZ(spcA_); break; // EOR A,dp+X
+    case 0x45: spcA_ ^= spcRead(absAddr()); setNZ(spcA_); break; // EOR A,abs
+    case 0x55: spcA_ ^= spcRead(aAbsX()); setNZ(spcA_); break; // EOR A,abs+X
+    case 0x56: spcA_ ^= spcRead(aAbsY()); setNZ(spcA_); break; // EOR A,abs+Y
+    case 0x46: spcA_ ^= spcRead(dpAddr(spcX_)); setNZ(spcA_); break; // EOR A,(X)
+    case 0x47: spcA_ ^= spcRead(aIndX()); setNZ(spcA_); break; // EOR A,[dp+X]
+    case 0x57: spcA_ ^= spcRead(aIndY()); setNZ(spcA_); break; // EOR A,[dp]+Y
+    case 0x49: { uint8_t s=spcFetch(); uint8_t d=spcFetch();   // EOR dp,dp
+        uint8_t r=(uint8_t)(spcRead(dpAddr(d))^spcRead(dpAddr(s))); spcWrite(dpAddr(d),r); setNZ(r); break; }
+
+    // ── CMP A, addr (недостающие режимы адресации) ────────────────────────
+    case 0x74: cmp8(spcA_, spcRead(aDpX()));  break; // CMP A,dp+X
+    case 0x75: cmp8(spcA_, spcRead(aAbsX())); break; // CMP A,abs+X
+    case 0x76: cmp8(spcA_, spcRead(aAbsY())); break; // CMP A,abs+Y
+    case 0x66: cmp8(spcA_, spcRead(dpAddr(spcX_))); break; // CMP A,(X)
+    case 0x67: cmp8(spcA_, spcRead(aIndX())); break; // CMP A,[dp+X]
+    case 0x77: cmp8(spcA_, spcRead(aIndY())); break; // CMP A,[dp]+Y
+    case 0x69: { uint8_t s=spcFetch(); uint8_t d=spcFetch();   // CMP dp,dp
+        cmp8(spcRead(dpAddr(d)), spcRead(dpAddr(s))); break; }
+
     // ── NOP-like для редких неизвестных опкодов ───────────────────────────
     default:
         break;
