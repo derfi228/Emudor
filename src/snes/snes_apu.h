@@ -15,19 +15,17 @@ public:
 
     void reset();
 
-    // ─── Cycle-accurate синхронизация ─────────────────────────────────────────
-    // Модель: каждый PPU-дот добавляем бюджет тактов SPC (addCycles), но реально
-    // исполняем SPC (flush) ТОЛЬКО когда CPU обращается к портам $2140-$2143 и в
-    // конце кадра. Так SPC всегда «догнан» до точного момента взаимодействия.
-    void addCycles(double spcCycles) { owed_ += spcCycles; }
-    void flush();                       // исполнить накопленный бюджет
-    static constexpr double SPC_PER_DOT = 1024000.0 / 5364480.0; // ≈0.19089
+    // ─── Cycle-accurate co-scheduler ──────────────────────────────────────────
+    // SPC700 исполняется ВПЕРЕМЕЖКУ с CPU/PPU по общему мастер-такту (см.
+    // SnesConsole::runFrame). stepOne() гонит ровно ОДНУ инструкцию SPC и
+    // возвращает её длительность в тактах SPC; tickDsp() генерит аудио-сэмплы.
+    // Никакого ленивого flush/burst — синхронность даёт сам планировщик, поэтому
+    // межпроцессорный хендшейк через порты работает с корректным таймингом.
+    int  stepOne();                 // одна инструкция SPC700 (+ тик таймеров)
+    void tickDsp(int spcCycles);    // DSP: один стерео-сэмпл каждые 32 такта SPC
 
-    // Совместимость со старым интерфейсом (1 «такт» = 4 дота)
-    void clock() { addCycles(4 * SPC_PER_DOT); }
-    void runCatchup(int) { flush(); }   // устар.: просто flush
-
-    // Порты связи с CPU SNES ($2140–$2143)
+    // Порты связи с CPU SNES ($2140–$2143). Просто разделяемые массивы —
+    // планировщик уже держит SPC «здесь и сейчас», прогон не нужен.
     void    writePort(uint8_t port, uint8_t data);
     uint8_t readPort (uint8_t port);
 
@@ -38,6 +36,9 @@ public:
     // Диагностика
     uint16_t dbgSpcPC()  const { return spcPC_; }
     uint8_t  dbgPort(uint8_t i) const { return portOut_[i & 3]; }
+    uint8_t  dbgPortIn(uint8_t i) const { return portIn_[i & 3]; }
+    uint8_t  dbgRam(uint16_t a) const { return ram_[a]; }
+    uint8_t  dbgF1() const { return ram_[0x00F1]; }
 
 private:
     // ─── SPC700 состояние ────────────────────────────────────────────────────
@@ -60,10 +61,9 @@ private:
     uint32_t dspPhase_[8] = {0,0,0,0,0,0,0,0};
     uint8_t  dspKonLatch_ = 0;
 
-    // ─── Cycle-accurate бюджет + аудио-делитель ───────────────────────────────
-    double   owed_ = 0.0;       // накопленный бюджет тактов SPC к исполнению
-    uint32_t audioAcc_ = 0;     // счётчик тактов до следующего аудио-сэмпла (32 кГц)
-    static constexpr uint32_t AUDIO_DIV = 32; // 1.024МГц / 32 = 32 кГц
+    // ─── Аудио-делитель DSP ───────────────────────────────────────────────────
+    int      spcCycleAccum_ = 0;  // накопленные такты SPC с последнего DSP-сэмпла
+    static constexpr int AUDIO_DIV = 32;  // 1.024МГц / 32 ≈ 32 кГц (32040 Гц)
 
     // ─── Состояние голосов DSP (BRR ADPCM) ────────────────────────────────────
     struct Voice {

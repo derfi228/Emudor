@@ -370,10 +370,10 @@ uint8_t SnesBus::readIO(uint16_t addr)
         return ppu_->readReg(addr);
     }
 
-    // APU: $2140–$2143 (SPC700 communication ports)
-    // flush: SPC700 догоняется до «сейчас» перед чтением порта (синхронизация).
+    // APU: $2140–$2143 (порты связи с SPC700).
+    // Синхронность обеспечивает co-scheduler (SPC исполняется вперемежку с CPU),
+    // поэтому прогон SPC здесь не нужен — просто читаем разделяемый порт.
     if (apu_ && addr >= 0x2140 && addr <= 0x2143) {
-        apu_->flush();
         return apu_->readPort((uint8_t)(addr - 0x2140));
     }
 
@@ -488,11 +488,9 @@ void SnesBus::writeIO(uint16_t addr, uint8_t data)
         return;
     }
 
-    // APU: $2140–$2143
-    // flush ПЕРЕД записью: SPC обрабатывает состояние до этого момента, затем
-    // получает новое значение порта (корректный порядок для handshake).
+    // APU: $2140–$2143 (порты связи с SPC700).
+    // Синхронность обеспечивает co-scheduler — просто пишем в разделяемый порт.
     if (apu_ && addr >= 0x2140 && addr <= 0x2143) {
-        apu_->flush();
         apu_->writePort((uint8_t)(addr - 0x2140), data);
         return;
     }

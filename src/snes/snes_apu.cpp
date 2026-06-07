@@ -21,6 +21,85 @@
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
+#include <string>
+
+// ─── Мини-дизассемблер SPC700 (только для отладочной трассировки) ──────────────
+// Возвращает "OP b1 b2  MNEMONIC". Полное декодирование операндов не требуется —
+// достаточно опкода, мнемоники и сырых байт, чтобы видеть ветвления.
+namespace {
+const char* spcMnem(uint8_t op)
+{
+    switch (op) {
+    case 0x00: return "NOP";
+    case 0x01: case 0x11: case 0x21: case 0x31: case 0x41: case 0x51:
+    case 0x61: case 0x71: case 0x81: case 0x91: case 0xA1: case 0xB1:
+    case 0xC1: case 0xD1: case 0xE1: case 0xF1: return "TCALL";
+    case 0x02: case 0x22: case 0x42: case 0x62: case 0x82: case 0xA2:
+    case 0xC2: case 0xE2: return "SET1";
+    case 0x12: case 0x32: case 0x52: case 0x72: case 0x92: case 0xB2:
+    case 0xD2: case 0xF2: return "CLR1";
+    case 0x03: case 0x23: case 0x43: case 0x63: case 0x83: case 0xA3:
+    case 0xC3: case 0xE3: return "BBS";
+    case 0x13: case 0x33: case 0x53: case 0x73: case 0x93: case 0xB3:
+    case 0xD3: case 0xF3: return "BBC";
+    case 0x10: return "BPL"; case 0x30: return "BMI";
+    case 0x50: return "BVC"; case 0x70: return "BVS";
+    case 0x90: return "BCC"; case 0xB0: return "BCS";
+    case 0xD0: return "BNE"; case 0xF0: return "BEQ";
+    case 0x2F: return "BRA";
+    case 0x2E: return "CBNE_dp"; case 0xDE: return "CBNE_dpX";
+    case 0x6E: return "DBNZ_dp"; case 0xFE: return "DBNZ_Y";
+    case 0x5F: return "JMP";  case 0x1F: return "JMP[X]";
+    case 0x3F: return "CALL"; case 0x4F: return "PCALL"; case 0x6F: return "RET";
+    case 0x7F: return "RETI"; case 0x0F: return "BRK";
+    case 0xCF: return "MUL";  case 0x9E: return "DIV";
+    case 0x20: return "CLRP"; case 0x40: return "SETP";
+    case 0x60: return "CLRC"; case 0x80: return "SETC"; case 0xED: return "NOTC";
+    case 0xE0: return "CLRV"; case 0x28: return "AND_A#";
+    case 0xE8: return "MOV_A#"; case 0xCD: return "MOV_X#"; case 0x8D: return "MOV_Y#";
+    case 0xE4: return "MOV_A_dp"; case 0xEB: return "MOV_Y_dp"; case 0xF8: return "MOV_X_dp";
+    case 0xE5: return "MOV_A_abs"; case 0xE6: return "MOV_A_(X)";
+    case 0xF4: return "MOV_A_dpX"; case 0xF5: return "MOV_A_absX"; case 0xF6: return "MOV_A_absY";
+    case 0xF7: return "MOV_A_[dp]Y"; case 0xE7: return "MOV_A_[dpX]";
+    case 0xBD: return "MOV_SP_X"; case 0x9D: return "MOV_X_SP";
+    case 0x5D: return "MOV_X_A"; case 0x7D: return "MOV_A_X";
+    case 0xDD: return "MOV_A_Y"; case 0xFD: return "MOV_Y_A";
+    case 0x9F: return "XCN"; case 0xDA: return "MOVW_dp_YA"; case 0xBA: return "MOVW_YA_dp";
+    case 0xC4: return "MOV_dp_A"; case 0xC5: return "MOV_abs_A"; case 0xC6: return "MOV_(X)_A";
+    case 0xC7: return "MOV_[dpX]_A"; case 0xCB: return "MOV_dp_Y"; case 0xCC: return "MOV_abs_Y";
+    case 0xD4: return "MOV_dpX_A"; case 0xD5: return "MOV_absX_A"; case 0xD6: return "MOV_absY_A";
+    case 0xD7: return "MOV_[dp]Y_A"; case 0xD8: return "MOV_dp_X"; case 0xD9: return "MOV_dpY_X";
+    case 0xDB: return "MOV_dpX_Y"; case 0xAF: return "MOV_(X+)_A"; case 0xBF: return "MOV_A_(X+)";
+    case 0xFA: return "MOV_dp_dp"; case 0x8F: return "MOV_dp_#";
+    case 0x68: return "CMP_A#"; case 0x64: return "CMP_A_dp"; case 0x65: return "CMP_A_abs";
+    case 0x78: return "CMP_dp_#"; case 0x69: return "CMP_dp_dp"; case 0x79: return "CMP_(X)(Y)";
+    case 0xC8: return "CMP_X#"; case 0x3E: return "CMP_X_dp"; case 0x1E: return "CMP_X_abs";
+    case 0xAD: return "CMP_Y#"; case 0x7E: return "CMP_Y_dp"; case 0x5E: return "CMP_Y_abs";
+    case 0x88: return "ADC_A#"; case 0xA8: return "SBC_A#";
+    case 0x08: return "OR_A#"; case 0x48: return "EOR_A#";
+    case 0x3D: return "INC_X"; case 0xFC: return "INC_Y"; case 0xBC: return "INC_A";
+    case 0x1D: return "DEC_X"; case 0xDC: return "DEC_Y"; case 0x9C: return "DEC_A";
+    case 0xAB: return "INC_dp"; case 0x8B: return "DEC_dp"; case 0xAC: return "INC_abs"; case 0x8C: return "DEC_abs";
+    case 0x1C: return "ASL_A"; case 0x5C: return "LSR_A"; case 0x3C: return "ROL_A"; case 0x7C: return "ROR_A";
+    case 0x0B: return "ASL_dp"; case 0x4B: return "LSR_dp"; case 0x2B: return "ROL_dp"; case 0x6B: return "ROR_dp";
+    case 0x2D: return "PUSH_A"; case 0x4D: return "PUSH_X"; case 0x6D: return "PUSH_Y"; case 0x0D: return "PUSH_P";
+    case 0xAE: return "POP_A"; case 0xCE: return "POP_X"; case 0xEE: return "POP_Y"; case 0x8E: return "POP_P";
+    case 0xBB: return "INC_dpX"; case 0x9B: return "DEC_dpX";
+    case 0xC9: return "MOV_abs_X"; case 0xE9: return "MOV_X_abs"; case 0xEC: return "MOV_Y_abs";
+    case 0x7A: return "ADDW"; case 0x9A: return "SUBW"; case 0x5A: return "CMPW";
+    case 0x3A: return "INCW"; case 0x1A: return "DECW";
+    case 0xFF: return "STOP"; case 0xEF: return "SLEEP";
+    default:   return "???";
+    }
+}
+std::string disasmSpc(const uint8_t* ram, uint16_t pc)
+{
+    char buf[40];
+    snprintf(buf, sizeof buf, "%02X %02X %02X %-10s",
+             ram[pc], ram[(uint16_t)(pc+1)], ram[(uint16_t)(pc+2)], spcMnem(ram[pc]));
+    return std::string(buf);
+}
+} // namespace
 
 // ─── IPL ROM (Sony, неизменный) ───────────────────────────────────────────────
 // Оригинальный 64-байтовый загрузчик SNES APU.
@@ -98,16 +177,25 @@ void SnesAPU::tickTimers()
     }
 }
 
-// ─── Исполнение накопленного бюджета тактов SPC700 ────────────────────────────
-// Запускается на доступах к портам APU и в конце кадра. Догоняет SPC до «сейчас».
-void SnesAPU::flush()
+// ─── Co-scheduler: одна инструкция SPC700 ─────────────────────────────────────
+// Вызывается планировщиком (SnesConsole::runFrame) вперемежку с CPU/PPU по
+// общему мастер-такту. Исполняет ровно ОДНУ инструкцию, тикает таймеры и
+// возвращает её длительность в тактах SPC (для расчёта следующего события).
+int SnesAPU::stepOne()
 {
-    while (owed_ >= 2.0) {           // минимальная инструкция ≈ 2 такта
-        int c = spcStep();
-        for (int i = 0; i < c; ++i) tickTimers();
-        owed_ -= c;
-        audioAcc_ += (uint32_t)c;
-        while (audioAcc_ >= AUDIO_DIV) { audioAcc_ -= AUDIO_DIV; genSample(); }
+    int c = spcStep();
+    for (int i = 0; i < c; ++i) tickTimers();
+    return c;
+}
+
+// ─── DSP: генерация аудио-сэмплов ────────────────────────────────────────────
+// Один стерео-сэмпл каждые 32 такта SPC (≈32 кГц).
+void SnesAPU::tickDsp(int spcCycles)
+{
+    spcCycleAccum_ += spcCycles;
+    while (spcCycleAccum_ >= AUDIO_DIV) {
+        spcCycleAccum_ -= AUDIO_DIV;
+        genSample();
     }
 }
 
@@ -205,26 +293,27 @@ void SnesAPU::genSample()
     if (outR < -32768) outR = -32768;
     samples_.push_back((int16_t)outL);
     samples_.push_back((int16_t)outR);
+
+    // ─── Диагностика DSP (EMUDOR_DSP) ────────────────────────────────────────
+    if (std::getenv("EMUDOR_DSP")) {
+        static long tot = 0, nz = 0; static int maxAmp = 0;
+        ++tot;
+        int a = outL < 0 ? -outL : outL, b = outR < 0 ? -outR : outR;
+        if (a > maxAmp) maxAmp = a;
+        if (b > maxAmp) maxAmp = b;
+        if (outL || outR) ++nz;
+        if ((tot % 96000) == 0)
+            fprintf(stderr, "[DSP] tot=%ld nz=%ld maxAmp=%d spcPC=%04X kon=%02X\n",
+                    tot, nz, maxAmp, spcPC_, dsp_[0x4C]);
+    }
 }
 
-// ─── Порты коммуникации ────────────────────────────────────────────────────────
+// ─── Порты коммуникации ──────────────────────────────────────────────────────
+// Просто разделяемые массивы: CPU↔SPC синхронизирует co-scheduler (SPC уже
+// исполняется вперемежку с CPU), поэтому никакого burst/flush здесь не нужно.
 void SnesAPU::writePort(uint8_t port, uint8_t data)
 {
     if (port < 4) portIn_[port] = data;
-
-    // IPL-фаза: пока SPC700 в загрузчике ($FFC0+), форсируем обработку записи.
-    // transfer-блок (port1 != 0): крутим до echo индекса (portOut[0]==data).
-    // execute (port1 == 0): крутим пока SPC НЕ выйдет из IPL — это и есть прыжок
-    //   на entry-point драйвера ($1F JMP [$00]). Так драйвер реально стартует.
-    // После старта драйвера (PC < $FFC0) burst отключается — далее работает flush().
-    if (port == 0 && spcPC_ >= 0xFFC0) {
-        for (int i = 0; i < 6000 && portOut_[0] != data && spcPC_ >= 0xFFC0; ++i) {
-            int c = spcStep();
-            for (int t = 0; t < c; ++t) tickTimers();
-            audioAcc_ += (uint32_t)c;
-            while (audioAcc_ >= AUDIO_DIV) { audioAcc_ -= AUDIO_DIV; genSample(); }
-        }
-    }
 }
 
 uint8_t SnesAPU::readPort(uint8_t port)
@@ -329,6 +418,27 @@ void SnesAPU::setNZ(uint8_t v)
 // Полная реализация выходит за рамки данной фазы.
 int SnesAPU::spcStep()
 {
+    // ─── Однократная трассировка пути движка SPC700 от $0500 (EMUDOR_SPCTRACE) ─
+    // getenv кэшируется (один раз), чтобы не бить по производительности.
+    static const bool s_spcTrace = std::getenv("EMUDOR_SPCTRACE") != nullptr;
+    if (s_spcTrace) {
+        static bool active = false;
+        static int  limit  = 2000;
+        if (spcPC_ == 0x0500) active = true;
+        if (active && limit > 0) {
+            --limit;
+            fprintf(stderr,
+                "SPC %04X  %s A=%02X X=%02X Y=%02X SP=%02X PSW=%02X  r04=%02X r05=%02X  "
+                "IN=%02X%02X%02X%02X OUT=%02X%02X%02X%02X\n",
+                spcPC_, disasmSpc(ram_.data(), spcPC_).c_str(),
+                spcA_, spcX_, spcY_, spcSP_, spcPSW_,
+                ram_[0x04], ram_[0x05],
+                portIn_[0], portIn_[1], portIn_[2], portIn_[3],
+                portOut_[0], portOut_[1], portOut_[2], portOut_[3]);
+            if (limit == 0) fprintf(stderr, "SPC TRACE LIMIT\n");
+        }
+    }
+
     uint8_t op = spcFetch();
     uint8_t dp = (spcPSW_ & FL_P) ? 0x01 : 0x00;  // Direct Page: $00xx или $01xx
 
@@ -774,7 +884,8 @@ int SnesAPU::spcStep()
     // ── TCALL n (вектор по адресу $FFxx) ─────────────────────────────────────
     case 0x01: case 0x11: case 0x21: case 0x31:
     case 0x41: case 0x51: case 0x61: case 0x71:
-    case 0x91: case 0xB1: case 0xD1: case 0xF1: {
+    case 0x81: case 0x91: case 0xA1: case 0xB1:
+    case 0xC1: case 0xD1: case 0xE1: case 0xF1: {
         uint8_t n = (op >> 4) & 0x0F;
         uint16_t vec = (uint16_t)(0xFFDE - n * 2);
         spcPush((uint8_t)(spcPC_ >> 8));
@@ -984,8 +1095,13 @@ int SnesAPU::spcStep()
     }
 
     // ── MOV dp, dp ($CA — это и MOV !abs, Y) ─────────────────────────────────
-    // $CA = MOV !abs, Y (absolute store Y)
-    case 0xCA: { uint16_t a = absAddr(); spcWrite(a, spcY_); break; }
+    // $CA = MOV1 m.b, C — записать флаг C в бит b ячейки (адрес=13 бит, бит=3 бита)
+    case 0xCA: {
+        uint16_t o = absAddr(); uint16_t a = (uint16_t)(o & 0x1FFF); uint8_t bit = (uint8_t)(o >> 13);
+        uint8_t v = spcRead(a);
+        if (spcPSW_ & FL_C) v |= (uint8_t)(1 << bit); else v &= (uint8_t)~(1 << bit);
+        spcWrite(a, v); break;
+    }
 
     // ── MOV X, #imm ($CD уже есть) / MOV Y, !abs ($EC) ──────────────────────
     case 0xEC: { uint16_t a = absAddr(); spcY_ = spcRead(a); setNZ(spcY_); break; }
@@ -1066,8 +1182,10 @@ int SnesAPU::spcStep()
     case 0xCC: { uint16_t a = absAddr(); spcWrite(a, spcY_); break; }
     // ── MOV X, dp+Y ($F9) ────────────────────────────────────────────────────
     case 0xF9: { uint8_t d = spcFetch(); spcX_ = spcRead(dpAddr((uint8_t)(d+spcY_))); setNZ(spcX_); break; }
-    // ── MOV dp+Y, A ($D9) ─ store A (не X!) ──────────────────────────────────
-    case 0xD9: { uint8_t d = spcFetch(); spcWrite(dpAddr((uint8_t)(d+spcY_)), spcA_); break; }
+    // ── MOV dp+Y, X ($D9) ─ хранит X (по карте опкодов SPC700) ────────────────
+    case 0xD9: { uint8_t d = spcFetch(); spcWrite(dpAddr((uint8_t)(d+spcY_)), spcX_); break; }
+    // ── MOV dp+X, Y ($DB) ─ хранит Y (ранее отсутствовал → рассинхрон потока) ──
+    case 0xDB: { uint8_t d = spcFetch(); spcWrite(dpAddr((uint8_t)(d+spcX_)), spcY_); break; }
     // ── CMP X, !abs ($1E) ────────────────────────────────────────────────────
     case 0x1E: {
         uint16_t a = absAddr(); uint8_t v = spcRead(a);
@@ -1219,6 +1337,57 @@ int SnesAPU::spcStep()
     case 0x77: cmp8(spcA_, spcRead(aIndY())); break; // CMP A,[dp]+Y
     case 0x69: { uint8_t s=spcFetch(); uint8_t d=spcFetch();   // CMP dp,dp
         cmp8(spcRead(dpAddr(d)), spcRead(dpAddr(s))); break; }
+
+    // ── Сдвиги/вращения abs ($0C ASL,$4C LSR,$2C ROL,$6C ROR) ─────────────────
+    case 0x0C: { uint16_t a=absAddr(); uint8_t v=spcRead(a); spcPSW_=(uint8_t)((spcPSW_&~FL_C)|(v>>7)); v<<=1; spcWrite(a,v); setNZ(v); break; }
+    case 0x4C: { uint16_t a=absAddr(); uint8_t v=spcRead(a); spcPSW_=(uint8_t)((spcPSW_&~FL_C)|(v&1)); v>>=1; spcWrite(a,v); setNZ(v); break; }
+    case 0x2C: { uint16_t a=absAddr(); uint8_t v=spcRead(a); uint8_t c=spcPSW_&FL_C; spcPSW_=(uint8_t)((spcPSW_&~FL_C)|(v>>7)); v=(uint8_t)((v<<1)|c); spcWrite(a,v); setNZ(v); break; }
+    case 0x6C: { uint16_t a=absAddr(); uint8_t v=spcRead(a); uint8_t c=spcPSW_&FL_C; spcPSW_=(uint8_t)((spcPSW_&~FL_C)|(v&1)); v=(uint8_t)((v>>1)|(c<<7)); spcWrite(a,v); setNZ(v); break; }
+
+    // ── Сдвиги/вращения dp+X ($1B ASL,$5B LSR,$3B ROL,$7B ROR) ────────────────
+    case 0x1B: { uint16_t a=dpAddr((uint8_t)(spcFetch()+spcX_)); uint8_t v=spcRead(a); spcPSW_=(uint8_t)((spcPSW_&~FL_C)|(v>>7)); v<<=1; spcWrite(a,v); setNZ(v); break; }
+    case 0x5B: { uint16_t a=dpAddr((uint8_t)(spcFetch()+spcX_)); uint8_t v=spcRead(a); spcPSW_=(uint8_t)((spcPSW_&~FL_C)|(v&1)); v>>=1; spcWrite(a,v); setNZ(v); break; }
+    case 0x3B: { uint16_t a=dpAddr((uint8_t)(spcFetch()+spcX_)); uint8_t v=spcRead(a); uint8_t c=spcPSW_&FL_C; spcPSW_=(uint8_t)((spcPSW_&~FL_C)|(v>>7)); v=(uint8_t)((v<<1)|c); spcWrite(a,v); setNZ(v); break; }
+    case 0x7B: { uint16_t a=dpAddr((uint8_t)(spcFetch()+spcX_)); uint8_t v=spcRead(a); uint8_t c=spcPSW_&FL_C; spcPSW_=(uint8_t)((spcPSW_&~FL_C)|(v&1)); v=(uint8_t)((v>>1)|(c<<7)); spcWrite(a,v); setNZ(v); break; }
+
+    // ── MOV [dp+X], A ($C7) — косвенно-индексное хранение ──────────────────────
+    case 0xC7: { uint8_t d=(uint8_t)(spcFetch()+spcX_);
+        uint16_t a=(uint16_t)(spcRead(dpAddr(d))|(spcRead(dpAddr((uint8_t)(d+1)))<<8));
+        spcWrite(a, spcA_); break; }
+
+    // ── Битовые операции с флагом C (адрес=13 бит, бит=3 бита) ────────────────
+    // OR1/AND1/EOR1/MOV1 C,m.b — влияют только на C; NOT1 m.b — без флагов.
+    case 0x0A: { uint16_t o=absAddr(); bool b=((spcRead((uint16_t)(o&0x1FFF))>>(o>>13))&1); if(b)  spcPSW_|=FL_C; break; }            // OR1  C, m.b
+    case 0x2A: { uint16_t o=absAddr(); bool b=((spcRead((uint16_t)(o&0x1FFF))>>(o>>13))&1); if(!b) spcPSW_|=FL_C; break; }            // OR1  C, /m.b
+    case 0x4A: { uint16_t o=absAddr(); bool b=((spcRead((uint16_t)(o&0x1FFF))>>(o>>13))&1); if(!b) spcPSW_&=(uint8_t)~FL_C; break; }   // AND1 C, m.b
+    case 0x6A: { uint16_t o=absAddr(); bool b=((spcRead((uint16_t)(o&0x1FFF))>>(o>>13))&1); if(b)  spcPSW_&=(uint8_t)~FL_C; break; }   // AND1 C, /m.b
+    case 0x8A: { uint16_t o=absAddr(); bool b=((spcRead((uint16_t)(o&0x1FFF))>>(o>>13))&1); if(b)  spcPSW_^=FL_C; break; }            // EOR1 C, m.b
+    case 0xAA: { uint16_t o=absAddr(); bool b=((spcRead((uint16_t)(o&0x1FFF))>>(o>>13))&1); spcPSW_=(uint8_t)((spcPSW_&~FL_C)|(b?FL_C:0)); break; } // MOV1 C, m.b
+    case 0xEA: { uint16_t o=absAddr(); uint16_t a=(uint16_t)(o&0x1FFF); uint8_t bit=(uint8_t)(o>>13); uint8_t v=spcRead(a); v^=(uint8_t)(1<<bit); spcWrite(a,v); break; } // NOT1 m.b
+
+    // ── TSET1/TCLR1 !abs ($0E/$4E): NZ по (A−mem), затем mem|=A / mem&=~A ──────
+    case 0x0E: { uint16_t a=absAddr(); uint8_t v=spcRead(a); setNZ((uint8_t)(spcA_-v)); spcWrite(a,(uint8_t)(v| spcA_)); break; }
+    case 0x4E: { uint16_t a=absAddr(); uint8_t v=spcRead(a); setNZ((uint8_t)(spcA_-v)); spcWrite(a,(uint8_t)(v&~spcA_)); break; }
+
+    // ── DAA/DAS A ($DF/$BE) — десятичная коррекция аккумулятора ────────────────
+    case 0xDF: { // DAA (после сложения)
+        if ((spcPSW_&FL_C) || spcA_ > 0x99) { spcA_ = (uint8_t)(spcA_ + 0x60); spcPSW_ |= FL_C; }
+        if ((spcPSW_&FL_H) || (spcA_ & 0x0F) > 0x09) { spcA_ = (uint8_t)(spcA_ + 0x06); }
+        setNZ(spcA_); break;
+    }
+    case 0xBE: { // DAS (после вычитания)
+        if (!(spcPSW_&FL_C) || spcA_ > 0x99) { spcA_ = (uint8_t)(spcA_ - 0x60); spcPSW_ &= (uint8_t)~FL_C; }
+        if (!(spcPSW_&FL_H) || (spcA_ & 0x0F) > 0x09) { spcA_ = (uint8_t)(spcA_ - 0x06); }
+        setNZ(spcA_); break;
+    }
+
+    // ── BRK ($0F): push PC,PSW; вектор $FFDE ──────────────────────────────────
+    case 0x0F: {
+        spcPush((uint8_t)(spcPC_ >> 8)); spcPush((uint8_t)spcPC_); spcPush(spcPSW_);
+        spcPSW_ |= FL_B; spcPSW_ &= (uint8_t)~FL_I;
+        spcPC_ = (uint16_t)(spcRead(0xFFDE) | (spcRead(0xFFDF) << 8));
+        break;
+    }
 
     // ── NOP-like для редких неизвестных опкодов ───────────────────────────
     default:

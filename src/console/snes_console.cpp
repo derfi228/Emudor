@@ -41,6 +41,9 @@ void SnesConsole::reset()
     apu_.reset();
     cpu_.reset();
     audioF_.clear();
+    masterClock_ = 0;
+    spcNextTick_ = 0;
+    resamplePos_ = 0.0;
 }
 
 // ─── Один кадр ───────────────────────────────────────────────────────────────
@@ -49,15 +52,22 @@ void SnesConsole::reset()
 // NMI-обработчик успел отработать до начала следующего активного кадра.
 void SnesConsole::runFrame()
 {
-    static constexpr int FRAME_DOTS = 341 * 262;   // 89342
+    using namespace snes_timing;
 
     bus_.setVBlankActive(false);
 
     int cpuAcc = 0;
 
-    for (int dot = 0; dot < FRAME_DOTS; ++dot) {
-        // ── PPU ──────────────────────────────────────────────────────────────
+    // ── Cycle-accurate co-scheduler ──────────────────────────────────────────
+    // PPU тикаем по доту, CPU — раз в 2 дота (как раньше, его тайминг НЕ меняем),
+    // а SPC700 интерливим по общей шкале мастер-тактов: пока следующая
+    // инструкция SPC «созрела» (spcNextTick_ <= masterClock_) — исполняем её.
+    // Так SPC работает ОДНОВРЕМЕННО с CPU, и хендшейк через порты идёт с верным
+    // относительным таймингом — это и устраняет дедлок загрузки N-SPC.
+    for (int dot = 0; dot < DOTS_PER_FRAME; ++dot) {
+        // ── PPU (1 дот) ──────────────────────────────────────────────────────
         ppu_.clock();
+        masterClock_ += MASTER_PER_PPU_DOT;
 
         // ── VBlank / NMI ─────────────────────────────────────────────────────
         if (ppu_.nmiPending) {
@@ -78,9 +88,12 @@ void SnesConsole::runFrame()
             if (!cpu_.stopped_ && !cpu_.waiting_) cpu_.clock();
         }
 
-        // ── APU: накапливаем бюджет тактов SPC каждый дот (cycle-accurate).
-        // Реальное исполнение (flush) — на доступах к портам и в конце кадра.
-        apu_.addCycles(SnesAPU::SPC_PER_DOT);
+        // ── SPC700: интерлив по мастер-такту (конкурентно с CPU) ─────────────
+        while (spcNextTick_ <= masterClock_) {
+            int c = apu_.stepOne();                              // одна инструкция SPC
+            spcNextTick_ += (uint64_t)c * MASTER_PER_SPC_CYCLE;  // её длительность
+            apu_.tickDsp(c);                                     // DSP-сэмплы (~32 кГц)
+        }
 
         // ── HDMA: раз в сканлайн ──────────────────────────────────────────────
         if (dot > 0 && dot % 341 == 0) {
@@ -107,8 +120,14 @@ void SnesConsole::runFrame()
     // VBlank завершился, сбрасываем флаг
     bus_.setVBlankActive(false);
 
-    // Догоняем SPC700 до конца кадра (исполняем остаток накопленного бюджета).
-    apu_.flush();
+    // ─── Диагностика хендшейка N-SPC (EMUDOR_APU_DBG) ───────────────────────
+    if (std::getenv("EMUDOR_APU_DBG")) {
+        fprintf(stderr, "f=%d spcPC=%04X F1=%02X | OUT %02X %02X %02X %02X | IN %02X %02X %02X %02X | $04/$05=%02X %02X | cpuPC=%04X\n",
+            dbgFrames_, apu_.dbgSpcPC(), apu_.dbgF1(),
+            apu_.dbgPort(0), apu_.dbgPort(1), apu_.dbgPort(2), apu_.dbgPort(3),
+            apu_.dbgPortIn(0), apu_.dbgPortIn(1), apu_.dbgPortIn(2), apu_.dbgPortIn(3),
+            apu_.dbgRam(0x04), apu_.dbgRam(0x05), cpu_.PC);
+    }
 
     // ─── Диагностика: трассировка CPU PC каждый кадр (EMUDOR_CPU_TRACE) ──────
     if (std::getenv("EMUDOR_CPU_TRACE")) {
@@ -135,11 +154,29 @@ void SnesConsole::runFrame()
 
 void SnesConsole::flushAudio()
 {
+    // DSP выдаёт стерео int16 @ ~32 кГц (L R L R …). SDL-устройство приложения —
+    // 44100 Гц МОНО float (как у NES). Поэтому здесь: стерео→моно (среднее) и
+    // ресэмпл 32000→44100 методом ближайшего соседа (nearest-neighbour).
+    // Фаза resamplePos_ сохраняется между кадрами, чтобы не было щелчков на стыке.
     const auto& buf = apu_.samples();
-    audioF_.reserve(audioF_.size() + buf.size());
-    for (int16_t s : buf) {
-        audioF_.push_back((float)s / 32768.0f);
+    const size_t frames = buf.size() / 2;          // число стерео-кадров
+    if (frames == 0) { apu_.clearSamples(); return; }
+
+    constexpr double SRC_RATE = (double)SnesAPU::SAMPLE_RATE; // 32000
+    constexpr double DST_RATE = 44100.0;
+    const double step = SRC_RATE / DST_RATE;        // вход. сэмплов на 1 выходной (~0.7256)
+
+    audioF_.reserve(audioF_.size() + (size_t)(frames / step) + 2);
+    while (resamplePos_ < (double)frames) {
+        size_t i = (size_t)resamplePos_;
+        int16_t l = buf[i * 2];
+        int16_t r = buf[i * 2 + 1];
+        float mono = ((float)l + (float)r) * 0.5f / 32768.0f;
+        audioF_.push_back(mono);
+        resamplePos_ += step;
     }
+    resamplePos_ -= (double)frames;                 // переносим остаток фазы на след. кадр
+
     apu_.clearSamples();
 }
 
