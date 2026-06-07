@@ -424,15 +424,13 @@ SnesPPU::BgPixel SnesPPU::getBGPixel(int bgIdx, int screenX, int screenY) const
     uint8_t  palNum   = (uint8_t)((entry >> 10) & 0x07);
     bool     priority = (entry >> 13) & 1;
 
-    // При 16×16 тайлах учитываем sub-tile смещение
+    // При 16×16 тайлах выбираем суб-тайл 8×8: +1 за правый столбец, +16 за нижний ряд.
     if (bigTile) {
         int subCol = pixInCol / 8;
         int subRow = pixInRow / 8;
         if (hFlip) subCol = 1 - subCol;
         if (vFlip) subRow = 1 - subRow;
-        tileNum = (uint16_t)((tileNum & 0x3F0) | ((tileNum + subRow * 16 + subCol) & 0x00F));
-        // Упрощение: берём только lower bits для sub-tile (не совсем точно для больших спрайтов)
-        tileNum = (uint16_t)(tileNum & 0x3FF);
+        tileNum = (uint16_t)((tileNum + subCol + subRow * 16) & 0x3FF);
         pixInCol %= 8;
         pixInRow %= 8;
     }

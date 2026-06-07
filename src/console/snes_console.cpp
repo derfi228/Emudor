@@ -4,6 +4,7 @@
 #include <istream>
 #include <cstring>
 #include <cstdio>
+#include <cmath>
 #include <cstdlib>
 
 // ─── Тайминг SNES (NTSC) ─────────────────────────────────────────────────────
@@ -44,6 +45,7 @@ void SnesConsole::reset()
     masterClock_ = 0;
     spcNextTick_ = 0;
     resamplePos_ = 0.0;
+    lastMono_    = 0.0f;
 }
 
 // ─── Один кадр ───────────────────────────────────────────────────────────────
@@ -155,9 +157,10 @@ void SnesConsole::runFrame()
 void SnesConsole::flushAudio()
 {
     // DSP выдаёт стерео int16 @ ~32 кГц (L R L R …). SDL-устройство приложения —
-    // 44100 Гц МОНО float (как у NES). Поэтому здесь: стерео→моно (среднее) и
-    // ресэмпл 32000→44100 методом ближайшего соседа (nearest-neighbour).
-    // Фаза resamplePos_ сохраняется между кадрами, чтобы не было щелчков на стыке.
+    // 44100 Гц МОНО float (как у NES). Здесь: стерео→моно (среднее) и ресэмпл
+    // 32000→44100 с ЛИНЕЙНОЙ интерполяцией (мягче, без «хруста» nearest-neighbour).
+    // Фаза resamplePos_ сохраняется между кадрами; последний сэмпл прошлого кадра
+    // (lastMono_) используется для интерполяции через стык.
     const auto& buf = apu_.samples();
     const size_t frames = buf.size() / 2;          // число стерео-кадров
     if (frames == 0) { apu_.clearSamples(); return; }
@@ -166,16 +169,23 @@ void SnesConsole::flushAudio()
     constexpr double DST_RATE = 44100.0;
     const double step = SRC_RATE / DST_RATE;        // вход. сэмплов на 1 выходной (~0.7256)
 
+    auto mono = [&](long idx) -> float {
+        if (idx < 0) return lastMono_;
+        if (idx >= (long)frames) idx = (long)frames - 1;
+        return ((float)buf[idx * 2] + (float)buf[idx * 2 + 1]) * 0.5f / 32768.0f;
+    };
+
     audioF_.reserve(audioF_.size() + (size_t)(frames / step) + 2);
     while (resamplePos_ < (double)frames) {
-        size_t i = (size_t)resamplePos_;
-        int16_t l = buf[i * 2];
-        int16_t r = buf[i * 2 + 1];
-        float mono = ((float)l + (float)r) * 0.5f / 32768.0f;
-        audioF_.push_back(mono);
+        long   i    = (long)std::floor(resamplePos_);
+        double frac = resamplePos_ - (double)i;
+        float  a    = mono(i);
+        float  b    = mono(i + 1);
+        audioF_.push_back(a + (b - a) * (float)frac);  // линейная интерполяция
         resamplePos_ += step;
     }
-    resamplePos_ -= (double)frames;                 // переносим остаток фазы на след. кадр
+    resamplePos_ -= (double)frames;                 // переносим остаток фазы
+    lastMono_ = mono((long)frames - 1);             // запоминаем хвост для стыка
 
     apu_.clearSamples();
 }
