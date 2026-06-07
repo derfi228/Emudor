@@ -743,9 +743,21 @@ void SnesPPU::renderScanline(int y)
 
             uint8_t subEnReg = regs_[0x2D];   // TS
 
+            // ── Mosaic ($2106): биты 4-7 = размер (1..16), биты 0-3 = какие BG ──
+            // Пиксель берёт цвет из левого-верхнего угла своего мозаик-блока.
+            uint8_t mosReg  = regs_[0x06];
+            int     mosSize = (mosReg >> 4) + 1;        // 1 = без мозаики
+            auto mosaicXY = [&](int bgIdx, int& mx, int& my) {
+                if (mosSize > 1 && (mosReg & (1 << bgIdx))) {
+                    mx = (x / mosSize) * mosSize;
+                    my = (y / mosSize) * mosSize;
+                } else { mx = x; my = y; }
+            };
+
             // ── Сбор слоёв BG1..BG4 для main и sub-screen ─────────────────────
             auto pushBG = [&](int bgIdx, int loP, int hiP) {
-                BgPixel bp = getBGPixel(bgIdx, x, y);
+                int mx, my; mosaicXY(bgIdx, mx, my);
+                BgPixel bp = getBGPixel(bgIdx, mx, my);
                 if (bp.color == 0) return;
                 int p = bp.priority ? hiP : loP;
                 if (mainEn   & (1 << bgIdx))
@@ -756,7 +768,8 @@ void SnesPPU::renderScanline(int y)
             pushBG(0, 3, 9);   // BG1
             pushBG(1, 5, 7);   // BG2
             {
-                BgPixel bp = getBGPixel(2, x, y);
+                int mx, my; mosaicXY(2, mx, my);
+                BgPixel bp = getBGPixel(2, mx, my);
                 if (bp.color != 0) {
                     bool bg3Hi = (regs_[0x05] & 0x08) != 0;
                     int p = bp.priority ? (bg3Hi ? 11 : 2) : 1;
