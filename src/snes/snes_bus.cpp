@@ -406,15 +406,18 @@ uint8_t SnesBus::readIO(uint16_t addr)
         return apu_->readPort((uint8_t)(addr - 0x2140));
     }
 
-    // Контроллеры $4016/$4017 (16 бит для SNES-геймпада)
+    // Контроллеры $4016/$4017 (ручной serial). Железо выдаёт биты СТАРШИМ вперёд:
+    // B,Y,Select,Start,Up,Down,Left,Right,A,X,L,R,... Наш controller[] хранит B в
+    // бите15, поэтому отдаём бит15 и сдвигаем ВЛЕВО (раньше отдавали бит0 → обратный
+    // порядок → игры с ручным опросом, напр. Street Fighter II, читали мусор).
     if (addr == 0x4016) {
-        uint8_t bit = (uint8_t)(ctrlShift_[0] & 1);
-        ctrlShift_[0] = (uint16_t)(ctrlShift_[0] >> 1);
+        uint8_t bit = (uint8_t)((ctrlShift_[0] >> 15) & 1);
+        ctrlShift_[0] = (uint16_t)(ctrlShift_[0] << 1);
         return (uint8_t)((openBus_ & 0xFC) | bit);
     }
     if (addr == 0x4017) {
-        uint8_t bit = (uint8_t)(ctrlShift_[1] & 1);
-        ctrlShift_[1] = (uint16_t)(ctrlShift_[1] >> 1);
+        uint8_t bit = (uint8_t)((ctrlShift_[1] >> 15) & 1);
+        ctrlShift_[1] = (uint16_t)(ctrlShift_[1] << 1);
         return (uint8_t)((openBus_ & 0xFC) | bit);
     }
 
