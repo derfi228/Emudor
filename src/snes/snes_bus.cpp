@@ -48,6 +48,18 @@ bool SnesBus::loadROM(const std::string& path)
     bool superfx = (romType == 0x13 || romType == 0x14 ||
                     romType == 0x15 || romType == 0x1A);
 
+    // ── DSP-1: тип карточки $03/$04/$05 (ROM+[RAM]+[Batt]+DSP), LoROM ─────────
+    // У Mario Kart валидный заголовок лежит по HiROM-смещению ($FFD6), хотя сам
+    // картридж LoROM — поэтому проверяем оба смещения. ВАЖНО: читаем raw ДО move.
+    auto isDspType = [&](uint32_t base) -> bool {
+        if (base + 0x16 >= raw.size()) return false;
+        uint8_t t = raw[base + 0x16];
+        return (t == 0x03 || t == 0x04 || t == 0x05);
+    };
+    // DSP-1 подключаем независимо от выбранного LoROM/HiROM (регистры DR/SR
+    // живут в $6000-$7FFF банков $00-$3F/$80-$BF в обоих режимах).
+    bool dsp1 = isDspType(LOROM_HEADER) || isDspType(HIROM_HEADER);
+
     // Размер SRAM
     uint32_t sramBytes = sramSize ? (1u << sramSize) * 1024u : 0u;
     sramBytes = std::min(sramBytes, (uint32_t)0x20000);  // макс. 128 KB
@@ -58,6 +70,10 @@ bool SnesBus::loadROM(const std::string& path)
     if (sramBytes > 0) {
         sram_.assign(sramBytes, 0x00);
     }
+
+    // DSP-1: устанавливаем флаг (детект сделан выше, ДО move).
+    hasDSP1_ = dsp1;
+    if (hasDSP1_) dsp1_.reset();
 
     // Инициализируем GSU после загрузки ROM
     hasSuperFX_ = superfx;
@@ -169,6 +185,12 @@ uint8_t SnesBus::read(uint32_t addr)
         return wram_[off];
     }
 
+    // ── DSP-1: DR=$6000-$6FFF, SR=$7000-$7FFF (банки $00-$3F/$80-$BF) ─────────
+    if (hasDSP1_ && (bank <= 0x3F || (bank >= 0x80 && bank <= 0xBF))
+        && off >= 0x6000 && off < 0x8000) {
+        return (off < 0x7000) ? dsp1_.readDR() : dsp1_.readSR();
+    }
+
     // ── ROM / SRAM — зависит от типа маппинга ────────────────────────────────
     switch (mapMode_) {
         case MapMode::LoROM:  return readLoROM(bank, off);
@@ -205,6 +227,13 @@ void SnesBus::write(uint32_t addr, uint8_t data)
     // ── Системные регистры I/O ────────────────────────────────────────────────
     if ((bank <= 0x3F || (bank >= 0x80 && bank <= 0xBF)) && off >= 0x2000 && off <= 0x5FFF) {
         writeIO(off, data);
+        return;
+    }
+
+    // ── DSP-1: запись DR ($6000-$6FFF); SR ($7000+) только на чтение ──────────
+    if (hasDSP1_ && (bank <= 0x3F || (bank >= 0x80 && bank <= 0xBF))
+        && off >= 0x6000 && off < 0x8000) {
+        if (off < 0x7000) dsp1_.writeDR(data);
         return;
     }
 

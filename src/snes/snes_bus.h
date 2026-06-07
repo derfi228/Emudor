@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include "superfx.h"
+#include "snes_dsp1.h"
 
 class SnesPPU;
 class SnesAPU;
@@ -88,6 +89,10 @@ private:
     // ─── SuperFX / GSU ────────────────────────────────────────────────────────
     bool     hasSuperFX_ = false;
     SuperFX  gsu_;
+
+    // ─── DSP-1 (мат. сопроцессор: Mario Kart, Pilotwings) ─────────────────────
+    bool     hasDSP1_ = false;
+    SnesDSP1 dsp1_;
 
     SnesPPU* ppu_ = nullptr;
     SnesAPU* apu_ = nullptr;
