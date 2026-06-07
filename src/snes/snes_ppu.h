@@ -85,6 +85,12 @@ private:
     // $2132 COLDATA — фиксированный цвет для color math (15-битный BGR555)
     uint16_t coldata_ = 0;
 
+    // ─── Защёлка H/V счётчиков луча (OPHCT $213C / OPVCT $213D) ────────────────
+    // Чтение $2137 (SLHV) или $213F сбрасывает toggle (след. чтение OPHCT/OPVCT
+    // даёт младший байт). Многие игры (Zelda) крутятся в ожидании OPVCT >= порога.
+    bool hvToggleH_ = false;   // false = след. чтение OPHCT даёт младший байт
+    bool hvToggleV_ = false;   // false = след. чтение OPVCT даёт младший байт
+
     // ─── Рендеринг ────────────────────────────────────────────────────────────
     void renderScanline(int y);
 

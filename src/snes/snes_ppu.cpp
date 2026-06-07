@@ -276,8 +276,27 @@ uint8_t SnesPPU::readReg(uint16_t addr)
         cgramHalf_ = !cgramHalf_;
         return v;
     }
+    case 0x2137: {                         // SLHV — программная защёлка H/V счётчиков
+        hvToggleH_ = false;
+        hvToggleV_ = false;
+        return 0;                          // открытая шина
+    }
+    case 0x213C: {                         // OPHCT — горизонтальный счётчик луча (9 бит)
+        uint16_t h = dot_;                 // 0..339
+        uint8_t v = hvToggleH_ ? (uint8_t)((h >> 8) & 1) : (uint8_t)(h & 0xFF);
+        hvToggleH_ = !hvToggleH_;
+        return v;
+    }
+    case 0x213D: {                         // OPVCT — вертикальный счётчик луча (9 бит)
+        uint16_t vc = scanline_;           // 0..261 (текущая строка луча)
+        uint8_t v = hvToggleV_ ? (uint8_t)((vc >> 8) & 1) : (uint8_t)(vc & 0xFF);
+        hvToggleV_ = !hvToggleV_;
+        return v;
+    }
     case 0x213E: return 0x01;              // STAT77: version 1
-    case 0x213F: {                         // STAT78: PPU2 version
+    case 0x213F: {                         // STAT78: PPU2 version (+ сброс H/V toggle)
+        hvToggleH_ = false;
+        hvToggleV_ = false;
         uint8_t v = (uint8_t)(regs_[0x3F] | 0x02);   // version 2, прочее — 0
         return v;
     }
