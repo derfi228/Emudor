@@ -552,7 +552,9 @@ void App::renderMainMenu() {
     ImGui::SetCursorPos({btnX + btnW + gap, topY + 1.0f});
     if (ImGui::Button(u8"↻", {btnW, 0})) {
         pruneDeletedRoms();
-        scanRomFolders();
+        scanRomsFolder();   // дефолтная папка roms/
+        scanRomFolders();   // пользовательские папки из конфига
+        saveConfig();       // сохраняем найденное, чтобы список персистился
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rescan ROM folders");
 
@@ -964,8 +966,8 @@ void App::renderSettings() {
             for (auto& f : romFolders_) if (f == folder) { dup = true; break; }
             if (!dup) {
                 romFolders_.push_back(folder);
-                saveConfig();
-                scanRomFolders();
+                scanRomFolders();   // сразу подхватываем игры из папки
+                saveConfig();       // сохраняем папку И найденные игры
             }
         }
     }
@@ -1076,9 +1078,33 @@ void App::launchROM(const std::string& path) {
     state_ = AppState::Playing;
 }
 
+// Находит папку roms/: сначала относительно cwd, затем относительно exe
+// (на случай запуска release двойным кликом — cwd там build/release).
+static std::string findRomsDir() {
+    namespace fs = std::filesystem;
+    try { if (fs::exists("roms") && fs::is_directory("roms")) return "roms"; } catch (...) {}
+    char* base = SDL_GetBasePath();
+    if (base && *base) {
+        fs::path bp = base; SDL_free(base);
+        fs::path cands[] = { bp/"roms", bp.parent_path()/"roms",
+                             bp.parent_path().parent_path()/"roms" };
+        for (const auto& c : cands) {
+            try { if (fs::exists(c) && fs::is_directory(c)) return c.string(); } catch (...) {}
+        }
+    }
+    return std::string();
+}
+
 void App::scanRomsFolder() {
-    if (!fs::exists("roms")) return;
-    for (auto& entry : fs::directory_iterator("roms")) {
+    std::string romsDir = findRomsDir();
+    if (romsDir.empty()) return;
+    // РЕКУРСИВНО: игры лежат в подпапках roms/snes, roms/nes и т.д.
+    std::error_code ec;
+    for (auto it = fs::recursive_directory_iterator(romsDir, ec);
+         it != fs::recursive_directory_iterator(); it.increment(ec)) {
+        if (ec) break;
+        const auto& entry = *it;
+        if (!entry.is_regular_file(ec)) continue;
         auto ct = detectConsole(entry.path().string());
         if (ct == ConsoleType::Unknown) continue;
         std::string p = entry.path().string();
@@ -1125,8 +1151,14 @@ void App::scanRomFolders()
 {
     for (const auto& folder : romFolders_) {
         if (!fs::exists(folder)) continue;
-        for (auto& entry : fs::directory_iterator(folder)) {
-            if (!entry.is_regular_file()) continue;
+        // РЕКУРСИВНО: пользователь может указать папку-контейнер (например roms/),
+        // где игры лежат в подпапках по консолям (snes/, nes/ …).
+        std::error_code ec;
+        for (auto it = fs::recursive_directory_iterator(folder, ec);
+             it != fs::recursive_directory_iterator(); it.increment(ec)) {
+            if (ec) break;
+            const auto& entry = *it;
+            if (!entry.is_regular_file(ec)) continue;
             auto ct = detectConsole(entry.path().string());
             if (ct == ConsoleType::Unknown) continue;
             std::string p = entry.path().string();
@@ -1312,24 +1344,49 @@ void App::applyDarkTheme() {
 
 // ─── Конфиг ──────────────────────────────────────────────────────────────────
 
-// Абсолютный путь к config.json рядом с исполняемым файлом.
-// SDL_GetBasePath возвращает директорию exe — устойчиво к изменению cwd
-// (например, после tinyfd-диалога выбора папки). Кешируем, потому что:
-//   1) SDL_GetBasePath требует SDL_Init и в редких случаях возвращает nullptr;
-//   2) tinyfd_selectFolderDialog меняет cwd процесса — если бы мы каждый раз
-//      вычисляли путь от относительного, файл уезжал бы в случайные места.
+// Путь к config.json в ОБЩЕМ для всех сборок месте (%APPDATA%/Emudor на Windows,
+// ~/.local/share на Linux) через SDL_GetPrefPath. Раньше конфиг лежал рядом с exe
+// (SDL_GetBasePath) — из-за этого debug и release имели РАЗНЫЕ библиотеки/папки,
+// и добавленные в одной сборке игры не появлялись в другой. Теперь — единый конфиг.
+// При первом запуске мигрируем старый конфиг рядом с exe, если он есть.
 static std::string configPath() {
     static std::string cached;
     if (!cached.empty()) return cached;
+
+    char* pref = SDL_GetPrefPath("Emudor", "Emudor");
+    if (pref && *pref) {
+        cached = std::string(pref) + "config.json";
+        SDL_free(pref);
+        // Одноразовая миграция старого конфига (рядом с exe или в соседней
+        // build-папке debug↔release), чтобы ранее добавленная библиотека не пропала.
+        try {
+            if (!fs::exists(cached)) {
+                char* base = SDL_GetBasePath();
+                if (base && *base) {
+                    fs::path bp = base;
+                    fs::path candidates[] = {
+                        bp / "config.json",
+                        bp.parent_path() / "debug"   / "config.json",
+                        bp.parent_path() / "release" / "config.json",
+                    };
+                    for (const auto& c : candidates) {
+                        if (fs::exists(c)) { fs::copy_file(c, cached); break; }
+                    }
+                    SDL_free(base);
+                }
+            }
+        } catch (...) {}
+        return cached;
+    }
+
+    // Fallback: рядом с exe, иначе cwd
     char* base = SDL_GetBasePath();
     if (base && *base) {
         cached = std::string(base) + "config.json";
         SDL_free(base);
     } else {
-        // Fallback: рядом с текущим cwd на момент первого вызова
-        try {
-            cached = (fs::current_path() / "config.json").string();
-        } catch (...) { cached = "config.json"; }
+        try { cached = (fs::current_path() / "config.json").string(); }
+        catch (...) { cached = "config.json"; }
     }
     return cached;
 }
