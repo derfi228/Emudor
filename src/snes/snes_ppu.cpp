@@ -765,24 +765,27 @@ void SnesPPU::renderScanline(int y)
                 if (subEnReg & (1 << bgIdx))
                     subLs[subN++]   = { cgram_[bp.color], p, (uint8_t)bgIdx, false };
             };
-            pushBG(0, 3, 9);   // BG1
-            pushBG(1, 5, 7);   // BG2
+            // Приоритеты (выше = ближе к зрителю) по официальному порядку Mode 1:
+            // OBJ3(10) > BG1hi(9) > BG2hi(8) > OBJ2(7) > BG1lo(6) > BG2lo(5) >
+            // OBJ1(4) > BG3hi(3, или 11 если $2105.3) > OBJ0(2) > BG3lo(1).
+            pushBG(0, 6, 9);   // BG1: lo=6, hi=9
+            pushBG(1, 5, 8);   // BG2: lo=5, hi=8
             {
                 int mx, my; mosaicXY(2, mx, my);
                 BgPixel bp = getBGPixel(2, mx, my);
                 if (bp.color != 0) {
                     bool bg3Hi = (regs_[0x05] & 0x08) != 0;
-                    int p = bp.priority ? (bg3Hi ? 11 : 2) : 1;
+                    int p = bp.priority ? (bg3Hi ? 11 : 3) : 1;
                     if (mainEn   & 4) mainLs[mainN++] = { cgram_[bp.color], p, 2, false };
                     if (subEnReg & 4) subLs[subN++]   = { cgram_[bp.color], p, 2, false };
                 }
             }
-            pushBG(3, 0, 1);   // BG4
+            pushBG(3, 0, 1);   // BG4 (только Mode 0)
 
             // ── OBJ ────────────────────────────────────────────────────────────
             // Спрайты с палитрой 4..7 участвуют в color math (objHiPal=true).
             if (nCached > 0) {
-                static const int kObjPrio[4] = { 4, 6, 8, 10 };
+                static const int kObjPrio[4] = { 2, 4, 7, 10 };  // OBJ prio 0..3 (Mode 1 порядок)
                 uint16_t objBase = (uint16_t)((regs_[0x01] & 0x07) << 13);
                 for (int si = 0; si < nCached; ++si) {
                     int dx = x - (int)sprCache[si].x;
