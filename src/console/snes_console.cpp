@@ -97,19 +97,25 @@ void SnesConsole::runFrame()
             apu_.tickDsp(c);                                     // DSP-сэмплы (~32 кГц)
         }
 
-        // ── HDMA: раз в сканлайн ──────────────────────────────────────────────
+        // ── HDMA / IRQ: раз в сканлайн ─────────────────────────────────────────
         if (dot > 0 && dot % 341 == 0) {
+            int scanline = dot / 341;
+
             // SuperFX/GSU работает параллельно CPU (~3:1 по тактам)
             bus_.runSuperFX(256);
 
-            bus_.runHDMA();
+            // HDMA шагает ТОЛЬКО по видимым строкам (1–224). В VBlank его гонять
+            // нельзя: resetHDMA() на NMI (строка 225) уже выставил hdmaInit_, и
+            // прогон в VBlank пере-инициализировал бы канал и «съел» начало
+            // таблицы → эффект съезжал по вертикали, низ экрана ломался
+            // (арена Street Fighter II, дождь Zelda, фон EarthBound).
+            if (scanline < 225) bus_.runHDMA();
 
             // ── IRQ по V-таймеру (только режимы 10/11 $4200) ──────────────────
             // H-IRQ намеренно не реализован — он срабатывает на каждой строке
             // и легко флудит CPU. Большинство игр используют V-IRQ.
             uint8_t mode = bus_.irqMode();
             if (mode == 2 || mode == 3) {
-                int scanline = dot / 341;
                 if (scanline == (int)bus_.vTarget()) {
                     bus_.raiseIrq();
                     cpu_.waiting_ = false;

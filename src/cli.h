@@ -13,6 +13,7 @@ struct CliArgs {
     bool        headless         = false;  // --headless
     std::string traceLogPath;     // --record-trace
     std::string inputScriptPath;  // --input-script (debug: воспроизведение нажатий)
+    std::string loadSramPath;     // --load-sram (загрузить .srm/battery до старта)
 
     bool        printHelp        = false;  // --help / -h
     std::string errorMsg;                  // непустое — ошибка парсинга

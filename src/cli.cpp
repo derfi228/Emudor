@@ -93,6 +93,10 @@ CliArgs parseCli(int argc, char** argv)
             const char* v = needVal("--input-script"); if (!v) return a;
             a.inputScriptPath = v;
         }
+        else if (flag == "--load-sram") {
+            const char* v = needVal("--load-sram"); if (!v) return a;
+            a.loadSramPath = v;
+        }
         else if (flag.rfind("--", 0) == 0) {
             a.errorMsg = "unknown flag: " + flag;
             return a;
@@ -376,6 +380,13 @@ int runHeadless(const CliArgs& args)
         std::fprintf(stderr, "Failed to load ROM: %s\n", args.romPath.c_str());
         IMG_Quit(); SDL_Quit();
         return 1;
+    }
+    // ── Загрузка battery-SRAM (опционально, до старта эмуляции) ───────────────
+    if (!args.loadSramPath.empty()) {
+        if (con->loadSram(args.loadSramPath))
+            std::fprintf(stdout, "SRAM загружен: %s\n", args.loadSramPath.c_str());
+        else
+            std::fprintf(stderr, "Не удалось загрузить SRAM: %s\n", args.loadSramPath.c_str());
     }
     // ── Trace log (опционально) ──────────────────────────────────────────────
     std::ofstream traceOut;
