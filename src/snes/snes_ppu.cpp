@@ -409,7 +409,11 @@ int SnesPPU::bgPaletteOffset(int bgIdx, uint8_t palNum) const
 {
     uint8_t mode = regs_[0x05] & 0x07;
     int bpp = bgBpp(bgIdx);
-    int colors = 1 << bpp;  // 4/16/256 цветов
+    // 8bpp-фон (Mode 3/4 BG1) адресует все 256 цветов CGRAM напрямую — номер
+    // палитры из тайлмапа ИГНОРИРУЕТСЯ. Иначе palNum*256 вылетает за CGRAM
+    // (out-of-bounds) и даёт белые/мусорные блоки (город EarthBound).
+    if (bpp == 8) return 0;
+    int colors = 1 << bpp;  // 4/16 цветов
     // В Mode 0 у каждого BG-слоя своя область палитры (CGRAM):
     // BG1: 0–15, BG2: 16–31, BG3: 32–47, BG4: 48–63
     if (mode == 0) return bgIdx * 0x20 + palNum * colors;
