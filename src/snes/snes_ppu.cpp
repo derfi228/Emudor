@@ -49,6 +49,22 @@ void SnesPPU::clock()
             nmiPending    = true;
             frameComplete = true;
             regs_[0x3F] |= 0x80;  // STAT78: VBlank флаг
+
+            // ── ВРЕМЕННАЯ диагностика PPU (EMUDOR_PPU_DBG) ───────────────────
+            if (std::getenv("EMUDOR_PPU_DBG")) {
+                static int fc = 0; ++fc;
+                if (fc % 100 == 0)
+                    fprintf(stderr,
+                        "[PPU f=%d] INIDISP=%02X OBSEL=%02X MODE(2105)=%02X TM=%02X TS=%02X "
+                        "CGWSEL=%02X CGADSUB=%02X COLDATA(int)=%04X | "
+                        "BG12NBA=%02X BG34NBA=%02X SC1=%02X SC2=%02X SC3=%02X SC4=%02X | "
+                        "W12SEL=%02X W34SEL=%02X WOBJSEL=%02X TMW=%02X TSW=%02X\n",
+                        fc, regs_[0x00], regs_[0x01], regs_[0x05], regs_[0x2C], regs_[0x2D],
+                        regs_[0x30], regs_[0x31], coldata_,
+                        regs_[0x0B], regs_[0x0C], regs_[0x07], regs_[0x08],
+                        regs_[0x09], regs_[0x0A],
+                        regs_[0x23], regs_[0x24], regs_[0x25], regs_[0x2E], regs_[0x2F]);
+            }
         }
         if (scanline_ >= 262) {
             scanline_ = 0;
@@ -63,6 +79,13 @@ void SnesPPU::writeReg(uint16_t addr, uint8_t data)
 {
     if (addr < 0x2100 || addr > 0x213F) return;
     uint8_t reg = (uint8_t)(addr - 0x2100);
+
+    // ── ВРЕМЕННАЯ диагностика записи $2105 (EMUDOR_M7DBG) ───────────────────
+    if (reg == 0x05 && data != regs_[0x05] && std::getenv("EMUDOR_M7DBG")) {
+        fprintf(stderr, "[2105] %02X->%02X scanline=%u dot=%u\n",
+                regs_[0x05], data, scanline_, dot_);
+    }
+
     regs_[reg] = data;
 
     switch (addr) {
@@ -197,6 +220,7 @@ void SnesPPU::writeReg(uint16_t addr, uint8_t data)
     case 0x211C: // M7B
         m7B_ = (int16_t)((data << 8) | m7Latch_);
         m7Latch_ = data;
+        m7MulB_  = (int8_t)data;   // для аппаратного умножителя ($2134-$2136)
         break;
     case 0x211D: // M7C
         m7C_ = (int16_t)((data << 8) | m7Latch_);
@@ -292,6 +316,14 @@ uint8_t SnesPPU::readReg(uint16_t addr)
         uint8_t v = hvToggleV_ ? (uint8_t)((vc >> 8) & 1) : (uint8_t)(vc & 0xFF);
         hvToggleV_ = !hvToggleV_;
         return v;
+    }
+    // ── Аппаратный умножитель PPU (MPYL/MPYM/MPYH) ───────────────────────────
+    // Результат = M7A (16 бит со знаком) × последний байт $211C (8 бит со знаком).
+    // Перемножение «мгновенное» (комбинационное) — без задержки.
+    case 0x2134: case 0x2135: case 0x2136: {
+        int32_t p = (int32_t)m7A_ * (int32_t)m7MulB_;
+        int shift = (int)(addr - 0x2134) * 8;
+        return (uint8_t)((uint32_t)p >> shift);
     }
     case 0x213E: return 0x01;              // STAT77: version 1
     case 0x213F: {                         // STAT78: PPU2 version (+ сброс H/V toggle)
@@ -891,6 +923,24 @@ void SnesPPU::renderScanline(int y)
             }
 
             finalColor = cgToRGBA(mainColor, brightness);
+
+            // ── ВРЕМЕННО: показать ТОЛЬКО один BG (EMUDOR_SHOWBG=0..3) ───────
+            if (const char* e = std::getenv("EMUDOR_SHOWBG")) {
+                int bi = e[0] - '0';
+                BgPixel b2 = getBGPixel(bi, x, y);
+                finalColor = (b2.color != 0)
+                    ? cgToRGBA(cgram_[b2.color], brightness)
+                    : 0xFF000000u;
+            }
+            // ── ВРЕМЕННО: показать ТОЛЬКО спрайты (EMUDOR_SHOWOBJ) ───────────
+            if (std::getenv("EMUDOR_SHOWOBJ")) {
+                finalColor = 0xFF000000u;
+                for (int i = 0; i < mainN; ++i)
+                    if (mainLs[i].src == 4) {
+                        finalColor = cgToRGBA(mainLs[i].cgColor, brightness);
+                        break;
+                    }
+            }
         }
 
         row[x] = finalColor;

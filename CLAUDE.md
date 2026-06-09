@@ -9,10 +9,20 @@ MSYS2 MinGW64, GCC 16, CMake 4.3, Ninja 1.13.
 ## Текущее состояние
 - **NES** — готов. CPU 6502 cycle-accurate, PPU 2C02, APU (2× pulse + triangle + noise),
   4 маппера (NROM/MMC1/MMC3/FME-7), Battery SRAM, save states. 46 юнит-тестов проходят.
-- **SNES** — в работе. CPU 65816, PPU (режимы 0-7, Mode 7 с HOFS/VOFS), SnesBus
-  (HiROM/LoROM, DMA, HDMA, auto-joypad, multiply/divide). **DSP — заглушка** (звука нет).
-  Color math и Mode 7 HDMA на матрицу — не реализованы. Mario Kart не работает.
+- **SNES** — в активной работе, играбелен. CPU 65816, PPU (режимы 0-7, Mode 7,
+  Mosaic, приоритеты спрайт↔фон, OPHCT/OPVCT), SnesBus (HiROM/LoROM, DMA, HDMA,
+  auto-joypad, multiply/divide).
+  - **Звук работает**: SPC700 (полный набор опкодов) + DSP (настоящий BRR ADPCM,
+    8 голосов, огибающие, микс). Синхронизация — co-scheduler по мастер-такту.
+    Звучат: Super Mario World, Zelda, Super Mario Kart. Молчат: EarthBound (KON не
+    выставляется), Super Street Fighter II (SPC застрял в IPL). Эха (echo/FIR) нет.
+  - **DSP-1** — минимальная заглушка (Mario Kart грузится, меню/музыка ок; трассы нет).
+  - **SuperFX/GSU** — каркас есть, часть GSU-тест-ROM падает/чёрный экран.
+  - Не сделано: цветовая математика (color math/прозрачность) частично, эхо DSP,
+    полная математика DSP-1 и SuperFX-рендера.
 - **GB, GBC, GBA, N64, PS1** — запланированы, не начаты.
+
+> Подробный живой статус (что играет, какие баги, скриншоты) — в `STATUS.md`.
 
 ## Команды
 
@@ -76,7 +86,12 @@ cmake -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build buil
 - **CPU 65816**: 8/16-бит режимы, banking (`src/snes/cpu65816.cpp`)
 - **SnesBus**: HiROM/LoROM auto-detect, DMA, HDMA, auto-joypad, multiply/divide (`src/snes/snes_bus.cpp`)
 - **SnesPPU**: режимы 0-7, Mode 7 affine, sprite caching (`src/snes/snes_ppu.cpp`)
-- **SnesAPU**: SPC700 + DSP-заглушка (`src/snes/snes_apu.cpp`)
+- **SnesAPU**: SPC700 (полный набор опкодов) + настоящий DSP (BRR ADPCM, 8 голосов).
+  Синхронизация CPU↔SPC700 — co-scheduler по общему мастер-такту (`SnesConsole::runFrame`):
+  PPU тикает по доту, CPU раз в 2 дота, а SPC700 «дозревает» по `spcNextTick_`. Порты
+  $2140–$2143 — просто общие массивы, без burst/flush (`src/snes/snes_apu.cpp`)
+- **SnesDSP1**: математический сопроцессор Mario Kart — заглушка (`src/snes/snes_dsp1.cpp`)
+- **SuperFX/GSU**: каркас (`src/snes/superfx.cpp`)
 
 ### Общее
 - **IConsole** (`src/console/iconsole.h`) — абстрактный интерфейс для всех консолей

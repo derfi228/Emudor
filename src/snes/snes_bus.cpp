@@ -625,7 +625,7 @@ static const int kDmaPattern[][4] = {
     {0, 1, 2, 3},  // mode 4
     {0, 1, 0, 1},  // mode 5
     {0, 0, 0, 0},  // mode 6 (= mode 2)
-    {0, 1, 2, 3},  // mode 7
+    {0, 0, 1, 1},  // mode 7 (= mode 3: два байта в reg, два в reg+1)
 };
 
 void SnesBus::execGDMACh(int ch)
