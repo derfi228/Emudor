@@ -50,8 +50,9 @@ void SnesPPU::clock()
             frameComplete = true;
             regs_[0x3F] |= 0x80;  // STAT78: VBlank флаг
 
-            // ── ВРЕМЕННАЯ диагностика PPU (EMUDOR_PPU_DBG) ───────────────────
-            if (std::getenv("EMUDOR_PPU_DBG")) {
+            // ── Диагностика PPU (EMUDOR_PPU_DBG); getenv кэширован ───────────
+            static const bool s_ppuDbg = std::getenv("EMUDOR_PPU_DBG") != nullptr;
+            if (s_ppuDbg) {
                 static int fc = 0; ++fc;
                 if (fc % 100 == 0)
                     fprintf(stderr,
@@ -80,8 +81,9 @@ void SnesPPU::writeReg(uint16_t addr, uint8_t data)
     if (addr < 0x2100 || addr > 0x213F) return;
     uint8_t reg = (uint8_t)(addr - 0x2100);
 
-    // ── ВРЕМЕННАЯ диагностика записи $2105 (EMUDOR_M7DBG) ───────────────────
-    if (reg == 0x05 && data != regs_[0x05] && std::getenv("EMUDOR_M7DBG")) {
+    // ── Диагностика записи $2105 (EMUDOR_M7DBG); getenv кэширован ───────────
+    static const bool s_m7Dbg = std::getenv("EMUDOR_M7DBG") != nullptr;
+    if (reg == 0x05 && data != regs_[0x05] && s_m7Dbg) {
         fprintf(stderr, "[2105] %02X->%02X scanline=%u dot=%u\n",
                 regs_[0x05], data, scanline_, dot_);
     }
@@ -924,16 +926,19 @@ void SnesPPU::renderScanline(int y)
 
             finalColor = cgToRGBA(mainColor, brightness);
 
-            // ── ВРЕМЕННО: показать ТОЛЬКО один BG (EMUDOR_SHOWBG=0..3) ───────
-            if (const char* e = std::getenv("EMUDOR_SHOWBG")) {
-                int bi = e[0] - '0';
+            // ── Отладка: показать ТОЛЬКО один BG (EMUDOR_SHOWBG=0..3) ────────
+            // getenv кэширован в static — вызывается на КАЖДЫЙ пиксель.
+            static const char* s_showBg  = std::getenv("EMUDOR_SHOWBG");
+            static const bool  s_showObj = std::getenv("EMUDOR_SHOWOBJ") != nullptr;
+            if (s_showBg) {
+                int bi = s_showBg[0] - '0';
                 BgPixel b2 = getBGPixel(bi, x, y);
                 finalColor = (b2.color != 0)
                     ? cgToRGBA(cgram_[b2.color], brightness)
                     : 0xFF000000u;
             }
-            // ── ВРЕМЕННО: показать ТОЛЬКО спрайты (EMUDOR_SHOWOBJ) ───────────
-            if (std::getenv("EMUDOR_SHOWOBJ")) {
+            // ── Отладка: показать ТОЛЬКО спрайты (EMUDOR_SHOWOBJ) ────────────
+            if (s_showObj) {
                 finalColor = 0xFF000000u;
                 for (int i = 0; i < mainN; ++i)
                     if (mainLs[i].src == 4) {

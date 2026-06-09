@@ -294,8 +294,9 @@ void SnesAPU::genSample()
     samples_.push_back((int16_t)outL);
     samples_.push_back((int16_t)outR);
 
-    // ─── Диагностика DSP (EMUDOR_DSP) ────────────────────────────────────────
-    if (std::getenv("EMUDOR_DSP")) {
+    // ─── Диагностика DSP (EMUDOR_DSP); getenv кэширован — горячий путь ───────
+    static const bool s_dspDbg = std::getenv("EMUDOR_DSP") != nullptr;
+    if (s_dspDbg) {
         static long tot = 0, nz = 0; static int maxAmp = 0;
         ++tot;
         int a = outL < 0 ? -outL : outL, b = outR < 0 ? -outR : outR;

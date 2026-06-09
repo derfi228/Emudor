@@ -122,8 +122,13 @@ void SnesConsole::runFrame()
     // VBlank завершился, сбрасываем флаг
     bus_.setVBlankActive(false);
 
+    // ─── Диагностика (все getenv кэшированы в static — вызов раз на процесс) ──
+    static const bool s_apuDbg    = std::getenv("EMUDOR_APU_DBG")    != nullptr;
+    static const bool s_cpuTrace  = std::getenv("EMUDOR_CPU_TRACE")  != nullptr;
+    static const bool s_stateDump = std::getenv("EMUDOR_STATE_DUMP") != nullptr;
+
     // ─── Диагностика хендшейка N-SPC (EMUDOR_APU_DBG) ───────────────────────
-    if (std::getenv("EMUDOR_APU_DBG")) {
+    if (s_apuDbg) {
         fprintf(stderr, "f=%d spcPC=%04X F1=%02X | OUT %02X %02X %02X %02X | IN %02X %02X %02X %02X | $04/$05=%02X %02X | cpuPC=%04X\n",
             dbgFrames_, apu_.dbgSpcPC(), apu_.dbgF1(),
             apu_.dbgPort(0), apu_.dbgPort(1), apu_.dbgPort(2), apu_.dbgPort(3),
@@ -132,14 +137,14 @@ void SnesConsole::runFrame()
     }
 
     // ─── Диагностика: трассировка CPU PC каждый кадр (EMUDOR_CPU_TRACE) ──────
-    if (std::getenv("EMUDOR_CPU_TRACE")) {
+    if (s_cpuTrace) {
         fprintf(stderr, "f=%d PBR:PC=%02X:%04X A=%04X X=%04X Y=%04X SP=%04X P=%02X wait=%d stop=%d\n",
                 dbgFrames_, cpu_.PBR, cpu_.PC, cpu_.A, cpu_.X, cpu_.Y, cpu_.SP, cpu_.P,
                 (int)cpu_.waiting_, (int)cpu_.stopped_);
     }
 
     // ─── Диагностика: одноразовый дамп состояния после 180 кадров ────────────
-    if (++dbgFrames_ == 180 && std::getenv("EMUDOR_STATE_DUMP")) {
+    if (++dbgFrames_ == 180 && s_stateDump) {
         if (FILE* f = fopen("debug_snes.txt", "w")) {
             fprintf(f, "=== SNES state after 180 frames ===\n");
             fprintf(f, "CPU: PBR=%02X PC=%04X A=%04X X=%04X Y=%04X SP=%04X P=%02X E=%d\n",
