@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "console/iconsole.h"
+#include "ui_theme.h"
 
 enum class AppState  { MainMenu, Playing, Paused };
 enum class ColorMode { Normal, Inverted, BlackWhite };
@@ -84,6 +85,12 @@ private:
     bool                  romLoaded_      = false;
     std::string           currentRomName_;        // безопасное имя текущей игры (для папки сохранений)
     bool                  hasGearGlyph_   = false;  // загружен ⚙ из системного шрифта
+
+    // ─── Дизайн UI (design_handoff_emudor_ui) ─────────────────────────────────
+    UiTheme  theme_;                 // текущая палитра (пересчитывается в applyXTheme)
+    UiFonts  fonts_;                 // Anton/Oswald/Instrument Serif/Inter
+    char     searchBuf_[128] = "";   // текст в поле поиска библиотеки
+    float    refreshSpinT_   = 0.0f; // 0..1 — прогресс анимации спина кнопки ↻
 
     // Save/Load
     bool                  showSaveModal_  = false;

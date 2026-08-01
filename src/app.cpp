@@ -2,6 +2,7 @@
 #include "console/nes_console.h"
 #include "console/snes_console.h"
 #include "console/console_detect.h"
+#include "ui_pads.h"
 #include <imgui.h>
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_sdlrenderer2.h>
@@ -11,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <cmath>
 #include <sstream>
 #include <cstring>
 #include <cstdio>
@@ -21,6 +23,10 @@
 
 namespace fs = std::filesystem;
 using json   = nlohmann::json;
+
+// ImU32 (упаковка ImGui) → ImVec4 — используется во всех render*-функциях
+// для перевода UiTheme-токенов в цвета ImGuiStyle/PushStyleColor.
+static ImVec4 ToVec4(ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); }
 
 // ─── Вспомогательные функции для обложек ────────────────────────────────────
 
@@ -156,27 +162,34 @@ void App::init() {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    // Основной шрифт: 18px, сглаживание через oversampling
-    // Пробуем несколько путей; если ни один не подошёл — AddFontDefault()
-    ImFontConfig fc;
-    fc.OversampleH = 3;
-    fc.OversampleV = 2;
-    fc.PixelSnapH  = false;
-    const char* fontCandidates[] = {
-        "assets/fonts/Cousine-Regular.ttf",  // вендорный
-        "C:/Windows/Fonts/segoeui.ttf",      // Windows Segoe UI
-        "C:/Windows/Fonts/tahoma.ttf",       // Windows Tahoma (запасной)
-    };
-    bool mainFontLoaded = false;
-    for (const char* fp : fontCandidates) {
-        if (fs::exists(fp)) {
-            io.Fonts->AddFontFromFileTTF(fp, 18.0f, &fc);
-            mainFontLoaded = true;
-            break;
+    // ── Дизайн-шрифты (design_handoff_emudor_ui): Anton/Oswald/Instrument
+    // Serif/Inter из assets/fonts/. Inter Regular 16px становится основным
+    // UI-шрифтом ImGui; если загрузка не удалась — старый Segoe UI/Tahoma
+    // fallback, чтобы приложение не осталось совсем без текста.
+    fonts_ = LoadUiFonts(io);
+    bool mainFontLoaded = (fonts_.ui != nullptr);
+    if (mainFontLoaded) {
+        io.FontDefault = fonts_.ui;
+    } else {
+        ImFontConfig fc;
+        fc.OversampleH = 3;
+        fc.OversampleV = 2;
+        fc.PixelSnapH  = false;
+        const char* fontCandidates[] = {
+            "assets/fonts/Cousine-Regular.ttf",  // вендорный
+            "C:/Windows/Fonts/segoeui.ttf",      // Windows Segoe UI
+            "C:/Windows/Fonts/tahoma.ttf",       // Windows Tahoma (запасной)
+        };
+        for (const char* fp : fontCandidates) {
+            if (fs::exists(fp)) {
+                io.Fonts->AddFontFromFileTTF(fp, 18.0f, &fc);
+                mainFontLoaded = true;
+                break;
+            }
         }
+        if (!mainFontLoaded)
+            io.Fonts->AddFontDefault();
     }
-    if (!mainFontLoaded)
-        io.Fonts->AddFontDefault();
 
     // Шестерёнка ⚙ (U+2699) из Segoe UI Symbol — только если основной
     // шрифт загружен через TTF (AddFontDefault даёт "implicit ref size",
@@ -468,12 +481,13 @@ void App::render() {
 
     // Фон: чёрный во время игры (для рамок), иначе — цвет темы
     bool inGame = (state_ == AppState::Playing || state_ == AppState::Paused);
-    if (inGame)
+    if (inGame) {
         SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255);
-    else if (themeMode_ == ThemeMode::Light)
-        SDL_SetRenderDrawColor(renderer_, 245, 245, 248, 255);
-    else
-        SDL_SetRenderDrawColor(renderer_, 18, 18, 24, 255);
+    } else {
+        ImVec4 bg = ImGui::ColorConvertU32ToFloat4(theme_.bg);
+        SDL_SetRenderDrawColor(renderer_,
+            (Uint8)(bg.x*255), (Uint8)(bg.y*255), (Uint8)(bg.z*255), 255);
+    }
     SDL_RenderClear(renderer_);
 
     if (inGame && console_ && gameTexture_) {
@@ -508,180 +522,283 @@ void App::render() {
 
 // ─── Главный экран ────────────────────────────────────────────────────────────
 
+// Пара цветов градиента-заглушки для игр без обложки — детерминированно из
+// имени (хэш), чтобы у разных игр были разные, но стабильные между кадрами
+// оттенки (как c1/c2 в GAMES[] макета).
+static void placeholderGradient(const std::string& name, ImU32& c1, ImU32& c2) {
+    uint32_t h = 2166136261u;
+    for (unsigned char c : name) { h ^= c; h *= 16777619u; }
+    float hue = (float)(h % 360u);
+    ImVec4 top, bot;
+    ImGui::ColorConvertHSVtoRGB(hue/360.0f, 0.55f, 0.62f, top.x, top.y, top.z);
+    ImGui::ColorConvertHSVtoRGB(hue/360.0f, 0.65f, 0.24f, bot.x, bot.y, bot.z);
+    c1 = ImGui::ColorConvertFloat4ToU32({top.x,top.y,top.z,1.0f});
+    c2 = ImGui::ColorConvertFloat4ToU32({bot.x,bot.y,bot.z,1.0f});
+}
+
+static const UiTheme::PadTint& padTintFor(const UiTheme& t, const std::string& console) {
+    if (console == "NES")  return t.padNes;
+    if (console == "SNES") return t.padSnes;
+    if (console == "GB")   return t.padGb;
+    if (console == "GBA")  return t.padGba;
+    if (console == "N64")  return t.padN64;
+    if (console == "PS1")  return t.padPs1;
+    return t.padNes;
+}
+
 void App::renderMainMenu() {
     int winW, winH;
     SDL_GetWindowSize(window_, &winW, &winH);
 
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ToVec4(theme_.bg));
     ImGui::SetNextWindowPos({0, 0});
     ImGui::SetNextWindowSize({(float)winW, (float)winH});
     ImGui::Begin("##main", nullptr,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoBringToFrontOnFocus);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    // ── Шапка ──
-    const float btnW     = 42.0f;
-    const float gap      = 6.0f;
-    const float rightPad = 14.0f;
-    // 3 кнопки: +, ↻, ⚙
-    float       btnX     = (float)winW - rightPad - btnW * 3.0f - gap * 2.0f;
-    float       topY     = ImGui::GetCursorPosY();   // Y верхней строки
+    // ── Шапка (header.app-bar): [+] [↻]   EMUDOR   [поиск] [⚙] ────────────────
+    const float padX    = 40.0f;
+    const float topY    = 22.0f;
+    const float btnSize = 44.0f;
+    const float btnGap  = 10.0f;
 
-    // Заголовок слева
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.098f, 0.463f, 0.824f, 1.0f));
-    ImGui::SetWindowFontScale(1.3f);
-    ImGui::Text("Emudor");
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::PopStyleColor();
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f);
 
-    // Кнопки — явно привязаны к topY, независимо от высоты заголовка
-    const char* gearLabel = hasGearGlyph_ ? u8"⚙" : "S";
-
-
-    // [+] Добавить ROM вручную
-    ImGui::SetCursorPos({btnX, topY + 1.0f});
-    if (ImGui::Button("+", {btnW, 0})) {
+    // [+] Добавить ROM — акцентная заливка
+    ImGui::SetCursorPos({padX, topY});
+    ImGui::PushStyleColor(ImGuiCol_Button,        ToVec4(theme_.accent));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ToVec4(theme_.accentDeep));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ToVec4(theme_.accentDeep));
+    ImGui::PushStyleColor(ImGuiCol_Text,          ImVec4(1.0f, 0.973f, 0.929f, 1.0f));
+    if (fonts_.uiSemiBold) ImGui::PushFont(fonts_.uiSemiBold);
+    if (ImGui::Button("+", {btnSize, btnSize})) {
         const char* filters[] = {"*.nes", "*.sfc", "*.smc", "*.fig", "*.swc"};
         const char* p = tinyfd_openFileDialog(
             "Add ROM to Library", "", 5, filters, "ROM files (NES/SNES)", 0);
         if (p) addRomEntry(p);
     }
+    if (fonts_.uiSemiBold) ImGui::PopFont();
+    ImGui::PopStyleColor(4);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add ROM manually");
 
-    // [↻] Пересканировать папки
-    ImGui::SetCursorPos({btnX + btnW + gap, topY + 1.0f});
-    if (ImGui::Button(u8"↻", {btnW, 0})) {
+    // [↻] Пересканировать папки — обычная (surface) кнопка
+    ImGui::SetCursorPos({padX + btnSize + btnGap, topY});
+    if (ImGui::Button(u8"↻", {btnSize, btnSize})) {
         pruneDeletedRoms();
-        scanRomsFolder();   // дефолтная папка roms/
-        scanRomFolders();   // пользовательские папки из конфига
-        saveConfig();       // сохраняем найденное, чтобы список персистился
+        scanRomsFolder();
+        scanRomFolders();
+        saveConfig();
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rescan ROM folders");
 
-    // [⚙] Настройки
-    ImGui::SetCursorPos({btnX + (btnW + gap) * 2.0f, topY + 1.0f});
-    if (ImGui::Button(gearLabel, {btnW, 0})) showSettings_ = !showSettings_;
+    // Логотип EMUDOR — Anton с эффектом объёма (стек смещённых обводок,
+    // порт --logo-extrude-1..4 из CSS text-shadow).
+    {
+        const char* logoText = "EMUDOR";
+        ImFont* lf = fonts_.logo ? fonts_.logo : ImGui::GetFont();
+        float   logoSize = 46.0f;
+        ImVec2  tsz = lf->CalcTextSizeA(logoSize, FLT_MAX, 0.0f, logoText);
+        ImVec2  base = { winW * 0.5f - tsz.x * 0.5f, topY - 3.0f };
+        float   k = logoSize / 76.0f;   // масштаб относительно эталонных 76px из CSS
+        struct { float d; ImU32 c; } layers[] = {
+            {6.0f, theme_.logoExtrude4}, {5.0f, theme_.logoExtrude3},
+            {4.0f, theme_.logoExtrude2}, {3.0f, theme_.logoExtrude1},
+            {2.0f, theme_.logoExtrude1},
+        };
+        for (auto& L : layers)
+            dl->AddText(lf, logoSize, {base.x + L.d*k, base.y + L.d*k}, L.c, logoText);
+        dl->AddText(lf, logoSize, base, theme_.logoColor, logoText);
+    }
+
+    // [⚙] Настройки + поле поиска — справа
+    float gearX   = winW - padX - btnSize;
+    float searchW = 260.0f;
+    float searchX = gearX - btnGap - searchW;
+
+    ImVec2 sp0 = {searchX, topY}, sp1 = {searchX + searchW, topY + btnSize};
+    dl->AddRectFilled(sp0, sp1, theme_.surface, btnSize * 0.5f);
+    dl->AddRect(sp0, sp1, theme_.line, btnSize * 0.5f, 0, 1.0f);
+    // Лупа — рисуем вручную (emoji-глиф 🔍 не покрыт шрифтом Inter → tofu-box)
+    {
+        ImVec2 c = {sp0.x + 20.0f, sp0.y + btnSize * 0.5f};
+        float  r = 5.0f;
+        dl->AddCircle(c, r, theme_.ink3, 16, 1.6f);
+        ImVec2 dir = {0.7071f, 0.7071f};
+        dl->AddLine({c.x+dir.x*r, c.y+dir.y*r}, {c.x+dir.x*r*1.9f, c.y+dir.y*r*1.9f}, theme_.ink3, 1.8f);
+    }
+
+    ImGui::SetCursorPos({searchX + 34.0f, topY + (btnSize - ImGui::GetFontSize())*0.5f});
+    ImGui::SetNextItemWidth(searchW - 48.0f);
+    ImGui::PushStyleColor(ImGuiCol_FrameBg,        ImVec4(0,0,0,0));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0,0,0,0));
+    ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  ImVec4(0,0,0,0));
+    ImGui::PushStyleColor(ImGuiCol_Border,         ImVec4(0,0,0,0));
+    ImGui::InputTextWithHint("##search", "Search the library...",
+                              searchBuf_, sizeof(searchBuf_));
+    ImGui::PopStyleColor(4);
+
+    ImGui::SetCursorPos({gearX, topY});
+    if (ImGui::Button("##gear", {btnSize, btnSize})) showSettings_ = !showSettings_;
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Settings");
-    if (showSettings_) renderSettings();
+    // Шестерёнка — рисуем вручную (Segoe UI Symbol ⚙ мёржился не в тот шрифт)
+    {
+        ImVec2 c = {gearX + btnSize*0.5f, topY + btnSize*0.5f};
+        float  r = 9.0f;
+        ImU32  col = theme_.ink2;
+        for (int i = 0; i < 8; ++i) {
+            float a = (float)i / 8.0f * 2.0f * 3.14159265f;
+            ImVec2 dir = {std::cos(a), std::sin(a)};
+            dl->AddLine({c.x+dir.x*r*0.68f, c.y+dir.y*r*0.68f},
+                        {c.x+dir.x*r*1.05f, c.y+dir.y*r*1.05f}, col, 2.4f);
+        }
+        dl->AddCircle(c, r*0.68f, col, 20, 1.8f);
+        dl->AddCircleFilled(c, r*0.28f, col);
+    }
 
-    // Перемещаем курсор ниже заголовка (1.3× высота строки) и ставим разделитель
-    ImGui::SetCursorPosY(topY + ImGui::GetTextLineHeightWithSpacing() * 1.4f);
-    ImGui::Separator();
+    ImGui::PopStyleVar(); // FrameRounding
 
-    // ── Сетка карточек ──
-    const float cardW   = 170.0f;
-    const float cardH   = 220.0f;
-    const float pad     = 14.0f;
-    const float cornerR = 8.0f;
+    // ── Тулбар: "N games in your library" + тонкая линия ──────────────────────
+    float toolbarY = topY + btnSize + 24.0f;
+    std::string filterLower = searchBuf_;
+    for (auto& c : filterLower) c = (char)tolower((unsigned char)c);
+    std::vector<size_t> visible;
+    for (size_t i = 0; i < romList_.size(); ++i) {
+        if (filterLower.empty()) { visible.push_back(i); continue; }
+        std::string n = romList_[i].name;
+        for (auto& c : n) c = (char)tolower((unsigned char)c);
+        if (n.find(filterLower) != std::string::npos) visible.push_back(i);
+    }
+    {
+        ImFont* df = fonts_.displayItalic ? fonts_.displayItalic : ImGui::GetFont();
+        std::string count = std::to_string(visible.size());
+        ImFont* uf = fonts_.uiSemiBold ? fonts_.uiSemiBold : ImGui::GetFont();
+        ImVec2 p = {padX, toolbarY};
+        ImVec2 cw = uf->CalcTextSizeA(22.0f, FLT_MAX, 0.0f, count.c_str());
+        dl->AddText(uf, 22.0f, p, theme_.ink, count.c_str());
+        dl->AddText(df, 22.0f, {p.x + cw.x + 6.0f, p.y}, theme_.ink2, " games in your library");
+    }
+    float lineY = toolbarY + 32.0f;
+    dl->AddLine({padX, lineY}, {winW - padX, lineY}, theme_.line, 1.0f);
 
-    float x      = pad;
-    float startY = ImGui::GetCursorPosY() + 4.0f;
-    float areaW  = (float)winW;
-    ImDrawList* dl = ImGui::GetWindowDrawList();
+    // ── Скроллируемая область сетки (порт main{overflow-y:auto}) ──────────────
+    // Шапка/тулбар выше остаются неподвижны — скроллится только сама библиотека.
+    ImGui::SetCursorPos({0.0f, lineY + 1.0f});
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ToVec4(theme_.bg));
+    ImGui::BeginChild("##libraryGrid", {(float)winW, (float)winH - lineY - 1.0f}, false);
+    ImDrawList* gdl = ImGui::GetWindowDrawList();
+    ImVec2 gridOrigin = ImGui::GetCursorScreenPos();
 
-    for (size_t i = 0; i < romList_.size(); i++) {
+    // ── Сетка карточек ──────────────────────────────────────────────────────
+    const float gapX    = 24.0f;
+    const float gapY    = 30.0f;
+    const float minCardW= 230.0f;
+    const float padStripH = 60.0f;
+    float areaW = winW - padX * 2.0f;
+    int   cols  = std::max(1, (int)((areaW + gapX) / (minCardW + gapX)));
+    float cardW = (areaW - (cols - 1) * gapX) / (float)cols;
+    float coverH = cardW * 4.0f / 3.0f;
+    float cardH  = coverH + padStripH;
+    const float cornerR = theme_.radius;
+
+    float x = gridOrigin.x + padX, y = gridOrigin.y + 24.0f;
+    int col = 0;
+
+    for (size_t vi = 0; vi < visible.size(); ++vi) {
+        size_t i = visible[vi];
         auto& entry = romList_[i];
-        ImGui::SetCursorPos({x, startY});
         ImGui::PushID((int)i);
 
-        ImVec2 p0 = ImGui::GetCursorScreenPos();
+        ImVec2 p0 = {x, y};
         ImVec2 p1 = {p0.x + cardW, p0.y + cardH};
         bool hovered = ImGui::IsMouseHoveringRect(p0, p1);
+        // Лёгкий "подъём" при наведении (упрощение CSS translateY(-4px)).
+        if (hovered) { p0.y -= 4.0f; p1.y -= 4.0f; }
+        ImVec2 coverP0 = p0, coverP1 = {p1.x, p0.y + coverH};
+        ImVec2 padP0   = {p0.x, coverP1.y}, padP1 = p1;
 
-        // Клипинг к границам карточки (скрывает выходящие за углы части)
-        dl->PushClipRect(p0, p1, true);
+        gdl->PushClipRect(p0, p1, true);
 
+        // ── Обложка ──
         if (entry.cover) {
-            // Обложка: crop-to-fill на всю карточку без полей
             int texW = 1, texH = 1;
             SDL_QueryTexture(entry.cover, nullptr, nullptr, &texW, &texH);
-            float scaleX = cardW / (float)texW;
-            float scaleY = cardH / (float)texH;
-            float scale  = scaleX > scaleY ? scaleX : scaleY;  // crop
-            float fitW   = texW * scale;
-            float fitH   = texH * scale;
-            float u0 = (fitW - cardW) / (2.0f * fitW);
-            float v0 = (fitH - cardH) / (2.0f * fitH);
-            float u1 = 1.0f - u0;
-            float v1 = 1.0f - v0;
-            dl->AddImageRounded((ImTextureID)(intptr_t)entry.cover,
-                p0, p1, {u0, v0}, {u1, v1}, IM_COL32_WHITE, cornerR);
+            float scaleX = (coverP1.x-coverP0.x) / (float)texW;
+            float scaleY = (coverP1.y-coverP0.y) / (float)texH;
+            float scale  = scaleX > scaleY ? scaleX : scaleY;
+            float fitW   = texW * scale, fitH = texH * scale;
+            float u0 = (fitW - (coverP1.x-coverP0.x)) / (2.0f * fitW);
+            float v0 = (fitH - (coverP1.y-coverP0.y)) / (2.0f * fitH);
+            gdl->AddImage((ImTextureID)(intptr_t)entry.cover,
+                coverP0, coverP1, {u0, v0}, {1.0f-u0, 1.0f-v0});
         } else {
-            // Заглушка: тёмный фон без иконок
-            dl->AddRectFilled(p0, p1, IM_COL32(34, 38, 52, 255), cornerR);
+            ImU32 c1, c2;
+            placeholderGradient(entry.name, c1, c2);
+            gdl->AddRectFilledMultiColor(coverP0, coverP1, c1, c1, c2, c2);
+            ImFont* df = fonts_.displayItalic ? fonts_.displayItalic : ImGui::GetFont();
+            ImFont* lf = fonts_.label ? fonts_.label : ImGui::GetFont();
+            std::string title = entry.name;
+            float tsize = 22.0f;
+            ImVec2 tsz = df->CalcTextSizeA(tsize, coverP1.x-coverP0.x-40.0f, 0.0f, title.c_str());
+            ImVec2 tp = {(coverP0.x+coverP1.x)*0.5f - tsz.x*0.5f, (coverP0.y+coverP1.y)*0.5f - tsz.y};
+            gdl->AddText(df, tsize, tp, IM_COL32(255,255,255,240), title.c_str());
+            std::string sub = entry.console;
+            float ssize = 12.0f;
+            ImVec2 ssz = lf->CalcTextSizeA(ssize, FLT_MAX, 0.0f, sub.c_str());
+            gdl->AddText(lf, ssize, {(coverP0.x+coverP1.x)*0.5f - ssz.x*0.5f, tp.y+tsz.y+10.0f},
+                        IM_COL32(255,255,255,200), sub.c_str());
         }
 
-        // Градиент снизу (прозрачный → тёмный) для читаемости текста
-        float gradH = 72.0f;
-        ImVec2 g0 = {p0.x, p1.y - gradH};
-        dl->AddRectFilledMultiColor(g0, p1,
-            IM_COL32(0,0,0,  0), IM_COL32(0,0,0,  0),
-            IM_COL32(0,0,0,210), IM_COL32(0,0,0,210));
-
-        // Имя игры
-        std::string label = entry.name.size() > 20
-            ? entry.name.substr(0, 19) + u8"…"
-            : entry.name;
-        float lineH  = ImGui::GetTextLineHeight();
-        float nameY  = p1.y - lineH - 9.0f;
-        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(),
-            {p0.x + 8.0f, nameY},
-            entry.cover ? IM_COL32(255,255,255,240) : IM_COL32(195,210,235,230),
-            label.c_str());
-
-        // Бейдж консоли (NES / SNES / ...) — над именем
-        if (!entry.console.empty()) {
-            const char*  badge  = entry.console.c_str();
-            const float  bfont  = 11.0f;
-            const float  bpadX  = 5.0f;
-            const float  bpadY  = 2.0f;
-            const float  bh     = bfont + bpadY * 2.0f;
-            float btw = ImGui::GetFont()->CalcTextSizeA(bfont, FLT_MAX, 0.0f, badge).x;
-            float bw  = btw + bpadX * 2.0f;
-            ImVec2 bs = {p0.x + 8.0f, nameY - bh - 4.0f};
-            // Цвет бейджа: NES — красный, SNES — фиолетовый, остальные — тёмно-серый
-            ImU32 badgeCol;
-            if      (entry.console == "NES")  badgeCol = IM_COL32(185,  30,  30, 225);
-            else if (entry.console == "SNES") badgeCol = IM_COL32( 85,  30, 175, 225);
-            else                              badgeCol = IM_COL32( 60,  60,  60, 225);
-            dl->AddRectFilled(bs, {bs.x + bw, bs.y + bh}, badgeCol, 4.0f);
-            dl->AddText(ImGui::GetFont(), bfont,
-                        {bs.x + bpadX, bs.y + bpadY},
-                        IM_COL32(255, 255, 255, 255), badge);
+        // Градиент снизу обложки + название (title-overlay)
+        float gradH = 46.0f;
+        gdl->AddRectFilledMultiColor({coverP0.x, coverP1.y-gradH}, coverP1,
+            IM_COL32(0,0,0,0), IM_COL32(0,0,0,0), IM_COL32(0,0,0,190), IM_COL32(0,0,0,190));
+        {
+            ImFont* uf = fonts_.uiSemiBold ? fonts_.uiSemiBold : ImGui::GetFont();
+            std::string label = entry.name.size() > 26 ? entry.name.substr(0,25)+u8"…" : entry.name;
+            gdl->AddText(uf, 14.0f, {coverP0.x+10.0f, coverP1.y-24.0f}, IM_COL32(255,255,255,245), label.c_str());
         }
 
-        // Ховер: лёгкий белый оверлей + синяя рамка
-        if (hovered) {
-            dl->AddRectFilled(p0, p1, IM_COL32(255,255,255,22), cornerR);
-            dl->AddRect(p0, p1, IM_COL32(25,118,210,200), cornerR, 0, 2.0f);
-        }
+        // ── Полоса геймпада ──
+        const auto& tint = padTintFor(theme_, entry.console);
+        gdl->AddRectFilled(padP0, padP1, tint.bg);
+        DrawControllerPad(gdl, {padP0.x, padP0.y}, {padP1.x-padP0.x, padP1.y-padP0.y},
+                           entry.console, tint.fg, fonts_.label);
 
-        dl->PopClipRect();
+        // Рамка карточки + ховер-подсветка
+        ImU32 borderCol = hovered ? theme_.accentSoft : theme_.line;
+        gdl->AddRect(p0, p1, borderCol, cornerR, 0, hovered ? 1.6f : 1.0f);
+        if (hovered)
+            gdl->AddRectFilled(coverP0, coverP1, (theme_.accentGlow & 0x00FFFFFFu) | 0x18000000u, 0);
 
-        // Кнопка-призрак на всю карточку
+        gdl->PopClipRect();
+
         ImGui::SetCursorScreenPos(p0);
-        if (ImGui::InvisibleButton("##card", {cardW, cardH}))
+        if (ImGui::InvisibleButton("##card", {p1.x-p0.x, p1.y-p0.y}))
             launchROM(entry.path);
 
         ImGui::PopID();
 
-        x += cardW + pad;
-        if (x + cardW + pad > areaW) {
-            x = pad;
-            startY += cardH + pad;
-        }
+        x += cardW + gapX;
+        if (++col >= cols) { col = 0; x = gridOrigin.x + padX; y += cardH + gapY; }
     }
 
     if (romList_.empty()) {
-        ImGui::SetCursorPosY(startY + 60.0f);
-        float tw2 = ImGui::CalcTextSize("No ROMs yet. Press  +  to add a ROM.").x;
-        ImGui::SetCursorPosX((winW - tw2) * 0.5f);
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.5f,0.5f,0.6f,1.0f));
+        ImGui::SetCursorScreenPos({gridOrigin.x + padX, y + 40.0f});
+        ImGui::PushStyleColor(ImGuiCol_Text, ToVec4(theme_.ink3));
         ImGui::TextUnformatted("No ROMs yet. Press  +  to add a ROM.");
         ImGui::PopStyleColor();
     }
 
+    ImGui::EndChild();
+    ImGui::PopStyleColor(); // ChildBg
+
     ImGui::End();
+    ImGui::PopStyleColor(); // WindowBg
+
+    if (showSettings_) renderSettings();
 }
 
 void App::renderGame() {}
@@ -701,38 +818,57 @@ void App::renderPauseOverlay() {
         ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoInputs |
         ImGuiWindowFlags_NoBringToFrontOnFocus);
     ImGui::GetWindowDrawList()->AddRectFilled(
-        {0,0}, {(float)winW,(float)winH}, IM_COL32(0,0,0,30));
+        {0,0}, {(float)winW,(float)winH}, IM_COL32(0,0,0,60));
     ImGui::End();
 
-    const float menuW = 300.0f, menuH = 240.0f;
+    const float menuW = 340.0f, menuH = 300.0f;
     ImGui::SetNextWindowPos({(winW-menuW)*0.5f,(winH-menuH)*0.5f});
     ImGui::SetNextWindowSize({menuW, menuH});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ToVec4(theme_.surface));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, theme_.radius);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {20.0f, 22.0f});
     ImGui::Begin("##pause", nullptr,
         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
         ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.098f,0.463f,0.824f,1.0f));
-    ImGui::SetWindowFontScale(1.1f);
-    float tw = ImGui::CalcTextSize("PAUSED").x;
-    ImGui::SetCursorPosX((menuW - tw) * 0.5f);
-    ImGui::TextUnformatted("PAUSED");
-    ImGui::SetWindowFontScale(1.0f);
+    // "PAUSED" — Oswald, разрежённые буквы (порт letter-spacing:.35em),
+    // акцентный цвет.
+    {
+        ImFont* lf = fonts_.labelSm ? fonts_.labelSm : ImGui::GetFont();
+        if (lf) ImGui::PushFont(lf);
+        ImGui::PushStyleColor(ImGuiCol_Text, ToVec4(theme_.accent));
+        ImGui::SetWindowFontScale(lf ? 1.7f : 1.1f);
+        const char* txt = "P A U S E D";
+        float tw = ImGui::CalcTextSize(txt).x;
+        ImGui::SetCursorPosX((menuW - 40.0f - tw) * 0.5f);
+        ImGui::TextUnformatted(txt);
+        ImGui::SetWindowFontScale(1.0f);
+        ImGui::PopStyleColor();
+        if (lf) ImGui::PopFont();
+    }
+    ImGui::Spacing();
+    ImGui::PushStyleColor(ImGuiCol_Separator, ToVec4(theme_.line));
+    ImGui::Separator();
     ImGui::PopStyleColor();
-    ImGui::Separator(); ImGui::Spacing();
+    ImGui::Spacing(); ImGui::Spacing();
 
-    float bw = menuW - 24.0f;
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0f, 8.0f});
-    if (ImGui::Button("Continue",     {bw, 38})) state_ = AppState::Playing;
-    if (ImGui::Button("Save",         {bw, 38})) { showSaveModal_ = true; showLoadModal_ = false; }
-    if (ImGui::Button("Load",         {bw, 38})) { showLoadModal_ = true; showSaveModal_ = false; }
-    if (ImGui::Button("Exit to Menu", {bw, 38})) {
+    float bw = menuW - 40.0f;
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0f, 10.0f});
+    if (ImGui::Button("Continue",     {bw, 40})) state_ = AppState::Playing;
+    if (ImGui::Button("Save",         {bw, 40})) { showSaveModal_ = true; showLoadModal_ = false; }
+    if (ImGui::Button("Load",         {bw, 40})) { showLoadModal_ = true; showSaveModal_ = false; }
+    ImGui::PushStyleColor(ImGuiCol_Text, ToVec4(theme_.accent));
+    if (ImGui::Button("Exit to Menu", {bw, 40})) {
         if (console_) console_->reset();
         romLoaded_ = false;
         state_     = AppState::MainMenu;
         SDL_SetWindowTitle(window_, "Emudor");
     }
+    ImGui::PopStyleColor();
     ImGui::PopStyleVar();
     ImGui::End();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor();
 }
 
 // ─── Save modal ──────────────────────────────────────────────────────────────
@@ -755,7 +891,7 @@ void App::renderSaveModal() {
             lbl += "##sv" + std::to_string(slot.index);
 
             ImGui::PushStyleColor(ImGuiCol_Text,
-                slot.hasData ? ImVec4(0.7f,0.4f,0.1f,1.0f)
+                slot.hasData ? ToVec4(theme_.accent)
                              : ImGui::GetStyleColorVec4(ImGuiCol_Text));
             if (ImGui::Button(lbl.c_str(), {310.0f, 36.0f})) {
                 saveStateToFile(slot.filename);
@@ -798,9 +934,9 @@ void App::renderLoadModal() {
 
             std::string idSuffix = "##ld" + std::to_string(slot.index);
             if (!slot.hasData) {
-                ImGui::PushStyleColor(ImGuiCol_Text,         ImVec4(0.55f,0.55f,0.58f,1.0f));
-                ImGui::PushStyleColor(ImGuiCol_Button,       ImVec4(0.90f,0.90f,0.93f,1.0f));
-                ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.90f,0.90f,0.93f,1.0f));
+                ImGui::PushStyleColor(ImGuiCol_Text,         ToVec4(theme_.ink3));
+                ImGui::PushStyleColor(ImGuiCol_Button,       ToVec4(theme_.surface2));
+                ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ToVec4(theme_.surface2));
                 std::string empty = slot.label + "  [empty]" + idSuffix;
                 ImGui::Button(empty.c_str(), {310.0f, 36.0f});
                 ImGui::PopStyleColor(3);
@@ -838,7 +974,7 @@ void App::renderSettings() {
     int winW, winH;
     SDL_GetWindowSize(window_, &winW, &winH);
 
-    // Полупрозрачный затемняющий оверлей
+    // Затемняющий/размывающий скрим (упрощённо — без blur, ImGui его не умеет)
     ImGui::SetNextWindowPos({0.0f, 0.0f});
     ImGui::SetNextWindowSize({(float)winW, (float)winH});
     ImGui::SetNextWindowBgAlpha(0.0f);
@@ -850,17 +986,78 @@ void App::renderSettings() {
         {0.0f, 0.0f}, {(float)winW, (float)winH}, IM_COL32(0, 0, 0, 80));
     ImGui::End();
 
-    // Центрированное неподвижное окно настроек
-    ImGui::SetNextWindowSizeConstraints({440.0f, 10.0f}, {440.0f, (float)winH * 0.9f});
-    ImGui::SetNextWindowPos(
-        ImVec2((float)winW * 0.5f, (float)winH * 0.5f),
-        ImGuiCond_Always, {0.5f, 0.5f});
-    if (!ImGui::Begin("Settings", &showSettings_,
-            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-            ImGuiWindowFlags_AlwaysAutoResize)) {
+    // ── Правая выезжающая панель (.drawer) — 420px, во всю высоту ─────────────
+    float drawerW = std::min(420.0f, winW * 0.92f);
+    ImGui::SetNextWindowPos({(float)winW - drawerW, 0.0f});
+    ImGui::SetNextWindowSize({drawerW, (float)winH});
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ToVec4(theme_.bg2));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {28.0f, 22.0f});
+    if (!ImGui::Begin("##settingsDrawer", nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoMove |
+            ImGuiWindowFlags_NoResize   | ImGuiWindowFlags_NoCollapse)) {
         ImGui::End();
+        ImGui::PopStyleVar(2);
+        ImGui::PopStyleColor();
         return;
     }
+    // Заголовок "Settings" (курсив, Instrument Serif) + [X] закрыть
+    {
+        ImFont* df = fonts_.displayItalic ? fonts_.displayItalic : ImGui::GetFont();
+        if (df) ImGui::PushFont(df);
+        ImGui::PushStyleColor(ImGuiCol_Text, ToVec4(theme_.accent));
+        ImGui::SetWindowFontScale(df ? 1.0f : 1.4f);
+        ImGui::TextUnformatted("Settings");
+        ImGui::SetWindowFontScale(1.0f);
+        ImGui::PopStyleColor();
+        if (df) ImGui::PopFont();
+    }
+    ImGui::SameLine(drawerW - 28.0f*2.0f - 30.0f);
+    if (ImGui::Button(u8"\xc3\x97##closeSettings", {30.0f, 30.0f})) showSettings_ = false;
+    ImGui::Spacing(); ImGui::Spacing();
+
+    // Section label ALL-CAPS + тонкая линия (порт .section-label)
+    auto sectionLabel = [&](const char* text) {
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Text, ToVec4(theme_.ink3));
+        if (fonts_.labelSm) ImGui::PushFont(fonts_.labelSm);
+        ImGui::TextUnformatted(text);
+        if (fonts_.labelSm) ImGui::PopFont();
+        ImGui::PopStyleColor();
+        ImGui::PushStyleColor(ImGuiCol_Separator, ToVec4(theme_.line));
+        ImGui::Separator();
+        ImGui::PopStyleColor();
+        ImGui::Spacing();
+    };
+
+    // Пилюля-чип радио-кнопки (порт .choice chip)
+    auto chip = [&](const char* label, bool selected) -> bool {
+        ImGui::PushStyleColor(ImGuiCol_Button,
+            selected ? ToVec4(theme_.accentSoft) : ToVec4(theme_.surface));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ToVec4(theme_.accentSoft));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ToVec4(theme_.accentSoft));
+        ImGui::PushStyleColor(ImGuiCol_Text,
+            selected ? ToVec4(theme_.accentDeep) : ToVec4(theme_.ink2));
+        ImGui::PushStyleColor(ImGuiCol_Border,
+            selected ? ToVec4(theme_.accent) : ToVec4(theme_.line));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
+        bool clicked = ImGui::Button(label);
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor(5);
+        return clicked;
+    };
+
+    sectionLabel("UI THEME");
+    if (chip("Light", themeMode_==ThemeMode::Light)) { themeMode_=ThemeMode::Light; applyLightTheme(); saveConfig(); }
+    ImGui::SameLine();
+    if (chip("Dark",  themeMode_==ThemeMode::Dark))  { themeMode_=ThemeMode::Dark;  applyDarkTheme();  saveConfig(); }
+
+    sectionLabel("GAME COLOR MODE");
+    if (chip("Normal",   colorMode_==ColorMode::Normal))     { colorMode_=ColorMode::Normal;     saveConfig(); }
+    ImGui::SameLine();
+    if (chip("Inverted", colorMode_==ColorMode::Inverted))   { colorMode_=ColorMode::Inverted;   saveConfig(); }
+    ImGui::SameLine();
+    if (chip("B&W",      colorMode_==ColorMode::BlackWhite)) { colorMode_=ColorMode::BlackWhite; saveConfig(); }
 
     // ── Универсальная таблица биндов ──────────────────────────────────────────
     // Рисует одну раскладку: имена кнопок + клавиша + Rebind.
@@ -899,14 +1096,14 @@ void App::renderSettings() {
     };
 
     // ── NES раскладка ─────────────────────────────────────────────────────────
-    ImGui::SeparatorText("Controls (NES)");
+    sectionLabel("CONTROLS (NES)");
     static const char* kNesNames[8] = {
         "Up", "Down", "Left", "Right", "A", "B", "Select", "Start"
     };
     drawBindTable("nes_keytable", false, nesKeys_, 8, kNesNames);
 
     // ── SNES раскладка ────────────────────────────────────────────────────────
-    ImGui::SeparatorText("Controls (SNES)");
+    sectionLabel("CONTROLS (SNES)");
     static const char* kSnesNames[12] = {
         "Up", "Down", "Left", "Right",
         "A", "B", "Select", "Start",
@@ -914,25 +1111,11 @@ void App::renderSettings() {
     };
     drawBindTable("snes_keytable", true, snesKeys_, 12, kSnesNames);
 
-    ImGui::SeparatorText("UI Theme");
-    if (ImGui::RadioButton("Light", themeMode_==ThemeMode::Light)) {
-        themeMode_=ThemeMode::Light; applyLightTheme(); saveConfig();
-    }
-    ImGui::SameLine();
-    if (ImGui::RadioButton("Dark", themeMode_==ThemeMode::Dark)) {
-        themeMode_=ThemeMode::Dark; applyDarkTheme(); saveConfig();
-    }
-
-    ImGui::SeparatorText("Game Color Mode");
-    if (ImGui::RadioButton("Normal##cm",  colorMode_==ColorMode::Normal))     { colorMode_=ColorMode::Normal;     saveConfig(); }
-    ImGui::SameLine();
-    if (ImGui::RadioButton("Inverted##cm",colorMode_==ColorMode::Inverted))   { colorMode_=ColorMode::Inverted;   saveConfig(); }
-    ImGui::SameLine();
-    if (ImGui::RadioButton("B&&W##cm",    colorMode_==ColorMode::BlackWhite)) { colorMode_=ColorMode::BlackWhite; saveConfig(); }
-
     // ── Папки с ROM ──────────────────────────────────────────────────────────
-    ImGui::SeparatorText("ROM Folders");
-    ImGui::TextDisabled("Folders scanned automatically on startup and by the  button.");
+    sectionLabel("ROM FOLDERS");
+    ImGui::PushStyleColor(ImGuiCol_Text, ToVec4(theme_.ink3));
+    ImGui::TextWrapped("Folders are scanned automatically on startup and when you press rescan.");
+    ImGui::PopStyleColor();
     ImGui::Spacing();
 
     for (int fi = 0; fi < (int)romFolders_.size(); ++fi) {
@@ -948,7 +1131,7 @@ void App::renderSettings() {
         ImGui::PopID();
     }
 
-    if (ImGui::Button("Add Folder...")) {
+    if (ImGui::Button("+ Add folder...")) {
         // Запоминаем cwd до диалога — tinyfd на Windows иногда меняет его
         fs::path savedCwd;
         try { savedCwd = fs::current_path(); } catch (...) {}
@@ -973,6 +1156,8 @@ void App::renderSettings() {
     }
 
     ImGui::End();
+    ImGui::PopStyleVar(2);   // WindowRounding, WindowPadding
+    ImGui::PopStyleColor();  // WindowBg
 }
 
 // ─── ROM управление ──────────────────────────────────────────────────────────
@@ -1280,66 +1465,51 @@ void App::triggerAutoSave() {
 
 // ─── Темы ─────────────────────────────────────────────────────────────────────
 
-void App::applyLightTheme() {
+// Применяет UiTheme (design_handoff_emudor_ui) к ImGuiStyle — используется
+// стандартными виджетами ImGui (Settings-таблицы, Save/Load модалки).
+static void applyThemeToImGuiStyle(const UiTheme& t) {
     ImGuiStyle& s = ImGui::GetStyle();
-    ImGui::StyleColorsLight(&s);
-    s.WindowRounding = s.ChildRounding = s.FrameRounding =
-    s.PopupRounding  = s.GrabRounding  = s.TabRounding   = 7.0f;
+    s.WindowRounding = s.ChildRounding = s.PopupRounding = t.radius;
+    s.FrameRounding  = s.GrabRounding  = s.TabRounding    = t.radiusSm;
     s.WindowBorderSize = s.FrameBorderSize = 1.0f;
-    s.ItemSpacing  = {8.0f, 6.0f};
-    s.FramePadding = {10.0f, 5.0f};
+    s.ItemSpacing  = {8.0f, 8.0f};
+    s.FramePadding = {10.0f, 6.0f};
 
-    auto accent  = ImVec4(0.098f, 0.463f, 0.824f, 1.0f);
-    auto accentD = ImVec4(0.050f, 0.310f, 0.620f, 1.0f);
-    s.Colors[ImGuiCol_WindowBg]           = ImVec4(0.965f,0.965f,0.980f,1.0f);
-    s.Colors[ImGuiCol_ChildBg]            = ImVec4(1.000f,1.000f,1.000f,1.0f);
-    s.Colors[ImGuiCol_PopupBg]            = ImVec4(0.990f,0.990f,1.000f,1.0f);
-    s.Colors[ImGuiCol_Text]               = ImVec4(0.130f,0.130f,0.150f,1.0f);
-    s.Colors[ImGuiCol_TextDisabled]       = ImVec4(0.620f,0.620f,0.650f,1.0f);
-    s.Colors[ImGuiCol_Border]             = ImVec4(0.840f,0.840f,0.880f,1.0f);
-    s.Colors[ImGuiCol_FrameBg]            = ImVec4(0.930f,0.930f,0.950f,1.0f);
-    s.Colors[ImGuiCol_FrameBgHovered]     = ImVec4(0.870f,0.920f,1.000f,1.0f);
-    s.Colors[ImGuiCol_TitleBg]            = ImVec4(0.940f,0.940f,0.960f,1.0f);
-    s.Colors[ImGuiCol_TitleBgActive]      = ImVec4(0.870f,0.920f,1.000f,1.0f);
-    s.Colors[ImGuiCol_Button]             = ImVec4(0.920f,0.925f,0.945f,1.0f);
+    ImVec4 accent  = ToVec4(t.accent);
+    ImVec4 accentD = ToVec4(t.accentDeep);
+    s.Colors[ImGuiCol_WindowBg]           = ToVec4(t.bg2);
+    s.Colors[ImGuiCol_ChildBg]            = ToVec4(t.surface);
+    s.Colors[ImGuiCol_PopupBg]            = ToVec4(t.surface);
+    s.Colors[ImGuiCol_Text]               = ToVec4(t.ink);
+    s.Colors[ImGuiCol_TextDisabled]       = ToVec4(t.ink3);
+    s.Colors[ImGuiCol_Border]             = ToVec4(t.line);
+    s.Colors[ImGuiCol_FrameBg]            = ToVec4(t.surface2);
+    s.Colors[ImGuiCol_FrameBgHovered]     = ToVec4(t.accentSoft);
+    s.Colors[ImGuiCol_TitleBg]            = ToVec4(t.bg2);
+    s.Colors[ImGuiCol_TitleBgActive]      = ToVec4(t.bg2);
+    s.Colors[ImGuiCol_Button]             = ToVec4(t.surface);
     s.Colors[ImGuiCol_ButtonHovered]      = accent;
     s.Colors[ImGuiCol_ButtonActive]       = accentD;
-    s.Colors[ImGuiCol_Header]             = ImVec4(0.870f,0.920f,1.000f,1.0f);
+    s.Colors[ImGuiCol_Header]             = ToVec4(t.accentSoft);
     s.Colors[ImGuiCol_HeaderHovered]      = accent;
-    s.Colors[ImGuiCol_Separator]          = ImVec4(0.840f,0.840f,0.880f,1.0f);
+    s.Colors[ImGuiCol_Separator]          = ToVec4(t.line);
     s.Colors[ImGuiCol_CheckMark]          = accent;
     s.Colors[ImGuiCol_SliderGrab]         = accent;
-    s.Colors[ImGuiCol_ScrollbarGrab]      = ImVec4(0.750f,0.780f,0.850f,1.0f);
+    s.Colors[ImGuiCol_ScrollbarGrab]      = ToVec4(t.line);
     s.Colors[ImGuiCol_ScrollbarGrabHovered] = accent;
-    s.Colors[ImGuiCol_TableBorderLight]   = ImVec4(0.840f,0.840f,0.880f,1.0f);
-    s.Colors[ImGuiCol_TableBorderStrong]  = ImVec4(0.720f,0.720f,0.780f,1.0f);
-    s.Colors[ImGuiCol_TableRowBgAlt]      = ImVec4(0.930f,0.940f,0.980f,0.6f);
+    s.Colors[ImGuiCol_TableBorderLight]   = ToVec4(t.line);
+    s.Colors[ImGuiCol_TableBorderStrong]  = ToVec4(t.ink3);
+    s.Colors[ImGuiCol_TableRowBgAlt]      = ToVec4(t.surface2);
+}
+
+void App::applyLightTheme() {
+    theme_ = MakeLightTheme();
+    applyThemeToImGuiStyle(theme_);
 }
 
 void App::applyDarkTheme() {
-    ImGuiStyle& s = ImGui::GetStyle();
-    ImGui::StyleColorsDark(&s);
-    s.WindowRounding = s.FrameRounding = s.GrabRounding =
-    s.TabRounding    = s.PopupRounding = 7.0f;
-    auto accent = ImVec4(0.29f,0.62f,1.0f,1.0f);
-    s.Colors[ImGuiCol_WindowBg]         = ImVec4(0.078f,0.078f,0.102f,1.0f);
-    s.Colors[ImGuiCol_Text]             = ImVec4(0.922f,0.929f,0.949f,1.0f);
-    s.Colors[ImGuiCol_Button]           = ImVec4(0.14f, 0.14f, 0.18f, 1.0f);
-    s.Colors[ImGuiCol_ButtonHovered]    = accent;
-    s.Colors[ImGuiCol_ButtonActive]     = ImVec4(0.19f,0.47f,0.83f,1.0f);
-    s.Colors[ImGuiCol_Header]           = ImVec4(0.16f,0.16f,0.22f,1.0f);
-    s.Colors[ImGuiCol_HeaderHovered]    = accent;
-    s.Colors[ImGuiCol_CheckMark]        = accent;
-    s.Colors[ImGuiCol_ScrollbarGrab]    = accent;
-    s.Colors[ImGuiCol_SliderGrab]       = accent;
-    s.Colors[ImGuiCol_FrameBg]          = ImVec4(0.12f,0.12f,0.16f,1.0f);
-    s.Colors[ImGuiCol_FrameBgHovered]   = ImVec4(0.16f,0.16f,0.22f,1.0f);
-    s.Colors[ImGuiCol_TitleBg]          = ImVec4(0.08f,0.08f,0.10f,1.0f);
-    s.Colors[ImGuiCol_TitleBgActive]    = ImVec4(0.10f,0.10f,0.14f,1.0f);
-    s.Colors[ImGuiCol_Separator]        = ImVec4(0.22f,0.22f,0.28f,1.0f);
-    s.Colors[ImGuiCol_TableBorderLight] = ImVec4(0.22f,0.22f,0.28f,1.0f);
-    s.Colors[ImGuiCol_TableBorderStrong]= ImVec4(0.30f,0.30f,0.38f,1.0f);
-    s.Colors[ImGuiCol_TableRowBgAlt]    = ImVec4(0.10f,0.10f,0.14f,0.5f);
+    theme_ = MakeDarkTheme();
+    applyThemeToImGuiStyle(theme_);
 }
 
 // ─── Конфиг ──────────────────────────────────────────────────────────────────
