@@ -33,6 +33,8 @@ struct UiFonts {
     ImFont* uiMedium     = nullptr; // Inter Medium
     ImFont* uiSemiBold   = nullptr; // Inter SemiBold — кнопки, акценты
     ImFont* uiBold       = nullptr; // Inter Bold
+    ImFont* mono         = nullptr; // JetBrains Mono Medium — section-label, kbd
+    ImFont* monoBold     = nullptr; // JetBrains Mono Bold
 };
 
 // Загружает все нужные .ttf из assets/fonts (пропускает отсутствующие без ошибки).

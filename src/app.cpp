@@ -13,6 +13,7 @@
 #include <fstream>
 #include <algorithm>
 #include <cmath>
+#include <utility>
 #include <sstream>
 #include <cstring>
 #include <cstdio>
@@ -27,6 +28,24 @@ using json   = nlohmann::json;
 // ImU32 (упаковка ImGui) → ImVec4 — используется во всех render*-функциях
 // для перевода UiTheme-токенов в цвета ImGuiStyle/PushStyleColor.
 static ImVec4 ToVec4(ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); }
+
+// Вставляет пробел между символами UTF-8 строки (порт letter-spacing:.35em
+// для "PAUSED") — по кодовым точкам, а не байтам, чтобы не ломать кириллицу/CJK.
+static std::string spaceOutUtf8(const std::string& s) {
+    std::string out;
+    size_t i = 0;
+    while (i < s.size()) {
+        size_t len = 1;
+        unsigned char c = (unsigned char)s[i];
+        if      ((c & 0xE0) == 0xC0) len = 2;
+        else if ((c & 0xF0) == 0xE0) len = 3;
+        else if ((c & 0xF8) == 0xF0) len = 4;
+        if (!out.empty()) out += ' ';
+        out += s.substr(i, len);
+        i += len;
+    }
+    return out;
+}
 
 // ─── Вспомогательные функции для обложек ────────────────────────────────────
 
@@ -558,6 +577,7 @@ void App::renderMainMenu() {
         ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoScrollbar |
         ImGuiWindowFlags_NoBringToFrontOnFocus);
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    const I18nStrings& tr = GetI18n(lang_);
 
     // ── Шапка (header.app-bar): [+] [↻]   EMUDOR   [поиск] [⚙] ────────────────
     const float padX    = 40.0f;
@@ -582,7 +602,7 @@ void App::renderMainMenu() {
     }
     if (fonts_.uiSemiBold) ImGui::PopFont();
     ImGui::PopStyleColor(4);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add ROM manually");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr.addRom);
 
     // [↻] Пересканировать папки — обычная (surface) кнопка
     ImGui::SetCursorPos({padX + btnSize + btnGap, topY});
@@ -592,7 +612,7 @@ void App::renderMainMenu() {
         scanRomFolders();
         saveConfig();
     }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Rescan ROM folders");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr.rescan);
 
     // Логотип EMUDOR — Anton с эффектом объёма (стек смещённых обводок,
     // порт --logo-extrude-1..4 из CSS text-shadow).
@@ -636,13 +656,13 @@ void App::renderMainMenu() {
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0,0,0,0));
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  ImVec4(0,0,0,0));
     ImGui::PushStyleColor(ImGuiCol_Border,         ImVec4(0,0,0,0));
-    ImGui::InputTextWithHint("##search", "Search the library...",
+    ImGui::InputTextWithHint("##search", tr.search,
                               searchBuf_, sizeof(searchBuf_));
     ImGui::PopStyleColor(4);
 
     ImGui::SetCursorPos({gearX, topY});
     if (ImGui::Button("##gear", {btnSize, btnSize})) showSettings_ = !showSettings_;
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Settings");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr.settingsTip);
     // Шестерёнка — рисуем вручную (Segoe UI Symbol ⚙ мёржился не в тот шрифт)
     {
         ImVec2 c = {gearX + btnSize*0.5f, topY + btnSize*0.5f};
@@ -678,7 +698,8 @@ void App::renderMainMenu() {
         ImVec2 p = {padX, toolbarY};
         ImVec2 cw = uf->CalcTextSizeA(22.0f, FLT_MAX, 0.0f, count.c_str());
         dl->AddText(uf, 22.0f, p, theme_.ink, count.c_str());
-        dl->AddText(df, 22.0f, {p.x + cw.x + 6.0f, p.y}, theme_.ink2, " games in your library");
+        std::string suffix = std::string(" ") + tr.gamesInLib;
+        dl->AddText(df, 22.0f, {p.x + cw.x + 6.0f, p.y}, theme_.ink2, suffix.c_str());
     }
     float lineY = toolbarY + 32.0f;
     dl->AddLine({padX, lineY}, {winW - padX, lineY}, theme_.line, 1.0f);
@@ -808,6 +829,7 @@ void App::renderGame() {}
 void App::renderPauseOverlay() {
     int winW, winH;
     SDL_GetWindowSize(window_, &winW, &winH);
+    const I18nStrings& tr = GetI18n(lang_);
 
     // Тонкий затемнитель
     ImGui::SetNextWindowPos({0, 0});
@@ -838,10 +860,10 @@ void App::renderPauseOverlay() {
         if (lf) ImGui::PushFont(lf);
         ImGui::PushStyleColor(ImGuiCol_Text, ToVec4(theme_.accent));
         ImGui::SetWindowFontScale(lf ? 1.7f : 1.1f);
-        const char* txt = "P A U S E D";
-        float tw = ImGui::CalcTextSize(txt).x;
+        std::string txt = spaceOutUtf8(tr.paused);
+        float tw = ImGui::CalcTextSize(txt.c_str()).x;
         ImGui::SetCursorPosX((menuW - 40.0f - tw) * 0.5f);
-        ImGui::TextUnformatted(txt);
+        ImGui::TextUnformatted(txt.c_str());
         ImGui::SetWindowFontScale(1.0f);
         ImGui::PopStyleColor();
         if (lf) ImGui::PopFont();
@@ -854,11 +876,11 @@ void App::renderPauseOverlay() {
 
     float bw = menuW - 40.0f;
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0f, 10.0f});
-    if (ImGui::Button("Continue",     {bw, 40})) state_ = AppState::Playing;
-    if (ImGui::Button("Save",         {bw, 40})) { showSaveModal_ = true; showLoadModal_ = false; }
-    if (ImGui::Button("Load",         {bw, 40})) { showLoadModal_ = true; showSaveModal_ = false; }
+    if (ImGui::Button(tr.continueBtn, {bw, 40})) state_ = AppState::Playing;
+    if (ImGui::Button(tr.save,        {bw, 40})) { showSaveModal_ = true; showLoadModal_ = false; }
+    if (ImGui::Button(tr.load,        {bw, 40})) { showLoadModal_ = true; showSaveModal_ = false; }
     ImGui::PushStyleColor(ImGuiCol_Text, ToVec4(theme_.accent));
-    if (ImGui::Button("Exit to Menu", {bw, 40})) {
+    if (ImGui::Button(tr.exit, {bw, 40})) {
         if (console_) console_->reset();
         romLoaded_ = false;
         state_     = AppState::MainMenu;
@@ -875,14 +897,16 @@ void App::renderPauseOverlay() {
 
 void App::renderSaveModal() {
     if (!showSaveModal_) return;
-    ImGui::OpenPopup("Save Game##modal");
+    const I18nStrings& tr = GetI18n(lang_);
+    std::string title = std::string(tr.saveGame) + "##modal";
+    ImGui::OpenPopup(title.c_str());
     ImVec2 c = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(c, ImGuiCond_Always, {0.5f,0.5f});
     ImGui::SetNextWindowSize({340.0f, 0.0f});
 
-    if (ImGui::BeginPopupModal("Save Game##modal", &showSaveModal_,
+    if (ImGui::BeginPopupModal(title.c_str(), &showSaveModal_,
         ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Choose a slot:");
+        ImGui::Text("%s", tr.chooseSlot);
         ImGui::Spacing();
         for (auto& slot : saveSlots_) {
             if (slot.isAuto) continue;  // авто-слот нельзя перезаписать вручную
@@ -903,7 +927,8 @@ void App::renderSaveModal() {
             ImGui::PopStyleColor();
         }
         ImGui::Spacing(); ImGui::Separator();
-        if (ImGui::Button("Cancel##sv", {310.0f, 34.0f})) {
+        std::string cancelId = std::string(tr.cancel) + "##sv";
+        if (ImGui::Button(cancelId.c_str(), {310.0f, 34.0f})) {
             showSaveModal_ = false;
             ImGui::CloseCurrentPopup();
         }
@@ -915,14 +940,16 @@ void App::renderSaveModal() {
 
 void App::renderLoadModal() {
     if (!showLoadModal_) return;
-    ImGui::OpenPopup("Load Game##modal");
+    const I18nStrings& tr = GetI18n(lang_);
+    std::string title = std::string(tr.loadGame) + "##modal";
+    ImGui::OpenPopup(title.c_str());
     ImVec2 c = ImGui::GetMainViewport()->GetCenter();
     ImGui::SetNextWindowPos(c, ImGuiCond_Always, {0.5f,0.5f});
     ImGui::SetNextWindowSize({340.0f, 0.0f});
 
-    if (ImGui::BeginPopupModal("Load Game##modal", &showLoadModal_,
+    if (ImGui::BeginPopupModal(title.c_str(), &showLoadModal_,
         ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Choose a slot:");
+        ImGui::Text("%s", tr.chooseSlot);
         ImGui::Spacing();
         bool firstAuto = true;
         for (auto& slot : saveSlots_) {
@@ -960,7 +987,8 @@ void App::renderLoadModal() {
             }
         }
         ImGui::Spacing(); ImGui::Separator();
-        if (ImGui::Button("Cancel##ld", {310.0f, 34.0f})) {
+        std::string cancelId = std::string(tr.cancel) + "##ld";
+        if (ImGui::Button(cancelId.c_str(), {310.0f, 34.0f})) {
             showLoadModal_ = false;
             ImGui::CloseCurrentPopup();
         }
@@ -1016,105 +1044,185 @@ void App::renderSettings() {
     if (ImGui::Button(u8"\xc3\x97##closeSettings", {30.0f, 30.0f})) showSettings_ = false;
     ImGui::Spacing(); ImGui::Spacing();
 
-    // Section label ALL-CAPS + тонкая линия (порт .section-label)
+    const I18nStrings& tr = GetI18n(lang_);
+    ImDrawList* sdl = ImGui::GetWindowDrawList();
+
+    // Section label ALL-CAPS mono + затухающая вправо линия (порт .section-label)
     auto sectionLabel = [&](const char* text) {
         ImGui::Spacing();
-        ImGui::PushStyleColor(ImGuiCol_Text, ToVec4(theme_.ink3));
-        if (fonts_.labelSm) ImGui::PushFont(fonts_.labelSm);
-        ImGui::TextUnformatted(text);
-        if (fonts_.labelSm) ImGui::PopFont();
-        ImGui::PopStyleColor();
-        ImGui::PushStyleColor(ImGuiCol_Separator, ToVec4(theme_.line));
-        ImGui::Separator();
-        ImGui::PopStyleColor();
+        ImFont* mf = fonts_.mono ? fonts_.mono : ImGui::GetFont();
+        float   fsz = 12.0f;
+        ImVec2  tsz = mf->CalcTextSizeA(fsz, FLT_MAX, 0.0f, text);
+        ImVec2  p0  = ImGui::GetCursorScreenPos();
+        sdl->AddText(mf, fsz, p0, theme_.ink3, text);
+        float lineY  = p0.y + tsz.y * 0.5f;
+        float lineX0 = p0.x + tsz.x + 10.0f;
+        float lineX1 = p0.x + ImGui::GetContentRegionAvail().x;
+        if (lineX1 > lineX0)
+            sdl->AddRectFilledMultiColor({lineX0, lineY-0.5f}, {lineX1, lineY+0.5f},
+                theme_.line, theme_.line & 0x00FFFFFFu,
+                theme_.line & 0x00FFFFFFu, theme_.line);
+        ImGui::Dummy({1.0f, tsz.y + 6.0f});
         ImGui::Spacing();
     };
 
-    // Пилюля-чип радио-кнопки (порт .choice chip)
+    // Choice-чип с dot-индикатором (точный порт .choice/.dot)
     auto chip = [&](const char* label, bool selected) -> bool {
-        ImGui::PushStyleColor(ImGuiCol_Button,
-            selected ? ToVec4(theme_.accentSoft) : ToVec4(theme_.surface));
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ToVec4(theme_.accentSoft));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ToVec4(theme_.accentSoft));
-        ImGui::PushStyleColor(ImGuiCol_Text,
-            selected ? ToVec4(theme_.accentDeep) : ToVec4(theme_.ink2));
-        ImGui::PushStyleColor(ImGuiCol_Border,
-            selected ? ToVec4(theme_.accent) : ToVec4(theme_.line));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 999.0f);
-        bool clicked = ImGui::Button(label);
-        ImGui::PopStyleVar();
-        ImGui::PopStyleColor(5);
+        ImFont* uf  = fonts_.ui ? fonts_.ui : ImGui::GetFont();
+        float   fsz = 14.0f;
+        ImVec2  tsz = uf->CalcTextSizeA(fsz, FLT_MAX, 0.0f, label);
+        float   dotR = 7.0f, padX = 14.0f, padY = 8.0f, gap = 8.0f;
+        float   w = padX*2.0f + dotR*2.0f + gap + tsz.x;
+        float   h = tsz.y + padY*2.0f;
+        ImVec2  p0 = ImGui::GetCursorScreenPos();
+        ImVec2  p1 = {p0.x + w, p0.y + h};
+        ImGui::InvisibleButton(label, {w, h});
+        bool hovered = ImGui::IsItemHovered();
+        bool clicked = ImGui::IsItemClicked();
+        ImU32 bg     = (selected || hovered) ? theme_.accentSoft : theme_.surface;
+        ImU32 border = selected ? theme_.accent : theme_.line;
+        ImU32 txtCol = selected ? theme_.ink : theme_.ink2;
+        sdl->AddRectFilled(p0, p1, bg, h*0.5f);
+        sdl->AddRect(p0, p1, border, h*0.5f, 0, 1.0f);
+        ImVec2 dotC = {p0.x + padX + dotR, p0.y + h*0.5f};
+        sdl->AddCircle(dotC, dotR, selected ? theme_.accent : theme_.ink3, 16, 1.5f);
+        if (selected) sdl->AddCircleFilled(dotC, dotR*0.42f, theme_.accent);
+        ImVec2 tp = {dotC.x + dotR + gap, p0.y + (h - tsz.y)*0.5f};
+        sdl->AddText(uf, fsz, tp, txtCol, label);
         return clicked;
     };
+    // Ряд чипов с явным ручным переносом строки (порт .choices{flex-wrap:wrap}).
+    // Не полагается на ImGui SameLine-семантику — она плохо сочеталась с чипами
+    // на сырых ImDrawList-примитивах (виджеты "терялись" за краем окна).
+    ImFont* chipFont = fonts_.ui ? fonts_.ui : ImGui::GetFont();
+    float   rowRight = ImGui::GetWindowPos().x + drawerW - 28.0f;
+    auto chipRow = [&](const std::vector<std::pair<const char*,bool>>& items) -> int {
+        float startX = ImGui::GetCursorScreenPos().x;
+        float x = startX, y = ImGui::GetCursorScreenPos().y;
+        float rowH = 0.0f;
+        int clickedIdx = -1;
+        const float gapBetween = 10.0f;
+        for (size_t i = 0; i < items.size(); ++i) {
+            const char* label = items[i].first;
+            ImVec2 tsz = chipFont->CalcTextSizeA(14.0f, FLT_MAX, 0.0f, label);
+            float w = 14.0f*2.0f + 7.0f*2.0f + 8.0f + tsz.x;
+            float h = tsz.y + 8.0f*2.0f;
+            if (x > startX && x + w > rowRight) { x = startX; y += h + gapBetween; }
+            ImGui::SetCursorScreenPos({x, y});
+            if (chip(label, items[i].second)) clickedIdx = (int)i;
+            rowH = h;
+            x += w + gapBetween;
+        }
+        ImGui::SetCursorScreenPos({startX, y + rowH + 4.0f});
+        return clickedIdx;
+    };
 
-    sectionLabel("UI THEME");
-    if (chip("Light", themeMode_==ThemeMode::Light)) { themeMode_=ThemeMode::Light; applyLightTheme(); saveConfig(); }
-    ImGui::SameLine();
-    if (chip("Dark",  themeMode_==ThemeMode::Dark))  { themeMode_=ThemeMode::Dark;  applyDarkTheme();  saveConfig(); }
+    sectionLabel(tr.uiTheme);
+    switch (chipRow({{tr.light, themeMode_==ThemeMode::Light}, {tr.dark, themeMode_==ThemeMode::Dark}})) {
+        case 0: themeMode_=ThemeMode::Light; applyLightTheme(); saveConfig(); break;
+        case 1: themeMode_=ThemeMode::Dark;  applyDarkTheme();  saveConfig(); break;
+    }
 
-    sectionLabel("GAME COLOR MODE");
-    if (chip("Normal",   colorMode_==ColorMode::Normal))     { colorMode_=ColorMode::Normal;     saveConfig(); }
-    ImGui::SameLine();
-    if (chip("Inverted", colorMode_==ColorMode::Inverted))   { colorMode_=ColorMode::Inverted;   saveConfig(); }
-    ImGui::SameLine();
-    if (chip("B&W",      colorMode_==ColorMode::BlackWhite)) { colorMode_=ColorMode::BlackWhite; saveConfig(); }
+    sectionLabel(tr.colorMode);
+    switch (chipRow({{tr.normal, colorMode_==ColorMode::Normal},
+                      {tr.inverted, colorMode_==ColorMode::Inverted},
+                      {tr.bw, colorMode_==ColorMode::BlackWhite}})) {
+        case 0: colorMode_=ColorMode::Normal;     saveConfig(); break;
+        case 1: colorMode_=ColorMode::Inverted;   saveConfig(); break;
+        case 2: colorMode_=ColorMode::BlackWhite; saveConfig(); break;
+    }
 
-    // ── Универсальная таблица биндов ──────────────────────────────────────────
-    // Рисует одну раскладку: имена кнопок + клавиша + Rebind.
+    // ── Язык ──────────────────────────────────────────────────────────────────
+    sectionLabel(tr.language);
+    static const Lang kLangs[5] = { Lang::EN, Lang::RU, Lang::ES, Lang::ZH, Lang::FR };
+    std::vector<std::pair<const char*,bool>> langItems;
+    for (Lang lg : kLangs) langItems.push_back({LangNativeName(lg), lang_ == lg});
+    int langIdx = chipRow(langItems);
+    if (langIdx >= 0) { lang_ = kLangs[langIdx]; saveConfig(); }
+
+    // ── Список биндов (без шапки таблицы — точный порт .binds/.row/kbd) ───────
     // snesContext=true → ребиндим snesKeys_, иначе nesKeys_.
-    auto drawBindTable = [&](const char* tableId, bool snesContext,
-                             KeyConfig& kc, int count,
-                             const char* const* names) {
+    auto bindsList = [&](bool snesContext, KeyConfig& kc, int count, const char* const* names) {
         SDL_Keycode* keys[12] = {
             &kc.up, &kc.down, &kc.left, &kc.right,
             &kc.a,  &kc.b,   &kc.select, &kc.start,
             &kc.x,  &kc.y,   &kc.l,      &kc.rsh
         };
-        if (ImGui::BeginTable(tableId, 3,
-                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                ImGuiTableFlags_SizingStretchSame)) {
-            ImGui::TableSetupColumn("Button");
-            ImGui::TableSetupColumn("Key");
-            ImGui::TableSetupColumn("Action");
-            ImGui::TableHeadersRow();
-            for (int i = 0; i < count; ++i) {
-                ImGui::TableNextRow();
-                ImGui::TableSetColumnIndex(0); ImGui::Text("%s", names[i]);
-                ImGui::TableSetColumnIndex(1); ImGui::Text("%s", SDL_GetKeyName(*keys[i]));
-                ImGui::TableSetColumnIndex(2);
-                ImGui::PushID(i);
-                bool isMe = (rebindIndex_ == i && rebindSnes_ == snesContext);
-                if (isMe) ImGui::TextDisabled("[press key...]");
-                else if (ImGui::SmallButton("Rebind")) {
+        const float rowH = 34.0f;
+        float  boxW = ImGui::GetContentRegionAvail().x;
+        ImVec2 b0   = ImGui::GetCursorScreenPos();
+        ImVec2 b1   = {b0.x + boxW, b0.y + rowH * count};
+        sdl->AddRectFilled(b0, b1, theme_.surface, theme_.radiusSm);
+        sdl->AddRect(b0, b1, theme_.line, theme_.radiusSm, 0, 1.0f);
+
+        ImFont* nameFont = fonts_.uiMedium ? fonts_.uiMedium : ImGui::GetFont();
+        ImFont* mf       = fonts_.mono     ? fonts_.mono     : ImGui::GetFont();
+        const float rebindW = 62.0f, rebindH = 24.0f;
+
+        for (int i = 0; i < count; ++i) {
+            float ry = b0.y + i * rowH;
+            if (i > 0) sdl->AddLine({b0.x+1.0f, ry}, {b1.x-1.0f, ry}, theme_.lineSoft, 1.0f);
+
+            sdl->AddText(nameFont, 14.0f, {b0.x + 14.0f, ry + (rowH-17.0f)*0.5f}, theme_.ink, names[i]);
+
+            const char* keyName = SDL_GetKeyName(*keys[i]);
+            ImVec2 ksz  = mf->CalcTextSizeA(11.0f, FLT_MAX, 0.0f, keyName);
+            float  kbdW = (ksz.x + 16.0f) > 30.0f ? (ksz.x + 16.0f) : 30.0f;
+            float  kbdH = 20.0f;
+            float  kbdX = b1.x - 14.0f - rebindW - 10.0f - kbdW;
+            ImVec2 kp0  = {kbdX, ry + (rowH-kbdH)*0.5f};
+            ImVec2 kp1  = {kbdX + kbdW, kp0.y + kbdH};
+            sdl->AddRectFilled(kp0, kp1, theme_.surface2, 5.0f);
+            sdl->AddRect(kp0, kp1, theme_.line, 5.0f, 0, 1.0f);
+            sdl->AddText(mf, 11.0f, {kp0.x + (kbdW-ksz.x)*0.5f, kp0.y + (kbdH-ksz.y)*0.5f}, theme_.ink, keyName);
+
+            ImGui::PushID(i);
+            ImGui::SetCursorScreenPos({b1.x - 14.0f - rebindW, ry + (rowH-rebindH)*0.5f});
+            bool isMe = (rebindIndex_ == i && rebindSnes_ == snesContext);
+            if (isMe) {
+                ImGui::PushStyleColor(ImGuiCol_Text, ToVec4(theme_.accent));
+                ImGui::TextUnformatted("...");
+                ImGui::PopStyleColor();
+            } else {
+                ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 6.0f);
+                ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0,0,0,0));
+                ImGui::PushStyleColor(ImGuiCol_Text, ToVec4(theme_.ink2));
+                if (ImGui::Button("Rebind", {rebindW, rebindH})) {
                     rebindIndex_ = i;
                     rebindSnes_  = snesContext;
                 }
-                ImGui::PopID();
+                ImGui::PopStyleColor(2);
+                ImGui::PopStyleVar();
             }
-            ImGui::EndTable();
+            ImGui::PopID();
         }
+        ImGui::SetCursorScreenPos({b0.x, b1.y + 14.0f});
     };
 
     // ── NES раскладка ─────────────────────────────────────────────────────────
+    ImGui::PushID("nes_keytable");
     sectionLabel("CONTROLS (NES)");
     static const char* kNesNames[8] = {
         "Up", "Down", "Left", "Right", "A", "B", "Select", "Start"
     };
-    drawBindTable("nes_keytable", false, nesKeys_, 8, kNesNames);
+    bindsList(false, nesKeys_, 8, kNesNames);
+    ImGui::PopID();
 
     // ── SNES раскладка ────────────────────────────────────────────────────────
+    ImGui::PushID("snes_keytable");
     sectionLabel("CONTROLS (SNES)");
     static const char* kSnesNames[12] = {
         "Up", "Down", "Left", "Right",
         "A", "B", "Select", "Start",
         "X", "Y", "L", "R"
     };
-    drawBindTable("snes_keytable", true, snesKeys_, 12, kSnesNames);
+    bindsList(true, snesKeys_, 12, kSnesNames);
+    ImGui::PopID();
 
     // ── Папки с ROM ──────────────────────────────────────────────────────────
-    sectionLabel("ROM FOLDERS");
+    sectionLabel(tr.romFolders);
     ImGui::PushStyleColor(ImGuiCol_Text, ToVec4(theme_.ink3));
-    ImGui::TextWrapped("Folders are scanned automatically on startup and when you press rescan.");
+    ImGui::TextWrapped("%s", tr.romHelper);
     ImGui::PopStyleColor();
     ImGui::Spacing();
 
@@ -1131,7 +1239,7 @@ void App::renderSettings() {
         ImGui::PopID();
     }
 
-    if (ImGui::Button("+ Add folder...")) {
+    if (ImGui::Button(tr.addFolder)) {
         // Запоминаем cwd до диалога — tinyfd на Windows иногда меняет его
         fs::path savedCwd;
         try { savedCwd = fs::current_path(); } catch (...) {}
@@ -1578,6 +1686,15 @@ void App::loadConfig() {
             else                     colorMode_ = ColorMode::Normal;
         }
 
+        if (j.contains("lang")) {
+            auto lg = j["lang"].get<std::string>();
+            if      (lg=="ru") lang_ = Lang::RU;
+            else if (lg=="es") lang_ = Lang::ES;
+            else if (lg=="zh") lang_ = Lang::ZH;
+            else if (lg=="fr") lang_ = Lang::FR;
+            else                lang_ = Lang::EN;
+        }
+
         // Загрузка раскладки из секции (поддерживает старый формат "keys" как NES)
         auto loadKc = [&](const json& k, KeyConfig& kc) {
             auto getKey = [&](const char* n, SDL_Keycode d) -> SDL_Keycode {
@@ -1637,6 +1754,8 @@ void App::saveConfig() {
     j["theme"] = (themeMode_==ThemeMode::Dark) ? "dark" : "light";
     j["color_mode"] = (colorMode_==ColorMode::Inverted)  ? "inverted"
                     : (colorMode_==ColorMode::BlackWhite) ? "bw" : "normal";
+    j["lang"] = lang_==Lang::RU ? "ru" : lang_==Lang::ES ? "es"
+              : lang_==Lang::ZH ? "zh" : lang_==Lang::FR ? "fr" : "en";
     auto dumpKc = [](json& out, const KeyConfig& kc) {
         out["up"]     = SDL_GetKeyName(kc.up);
         out["down"]   = SDL_GetKeyName(kc.down);

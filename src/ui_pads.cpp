@@ -1,4 +1,5 @@
 #include "ui_pads.h"
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -125,16 +126,20 @@ void DrawControllerPad(ImDrawList* dl, ImVec2 pos, ImVec2 size,
     // как в pads.js (#2a2620 / #0c0620 для GBA).
     const ImU32 plastic = PadCol(0x2a2620);
 
-    // ── Колонка с названием консоли (~22% ширины полосы) ──────────────────────
-    float labelW = size.x * 0.24f;
+    // ── Колонка с названием консоли — фиксированные 64px (CSS grid-template-
+    // columns: 64px 1fr, не пропорция от ширины карточки) ─────────────────────
+    const float kLabelColPx = 64.0f;
+    const float kGapPx      = 10.0f;
+    float labelW = std::min(kLabelColPx, size.x * 0.5f);  // защита для очень узких карточек
     if (labelFont) {
         std::string up = consoleId;
         for (auto& c : up) c = (char)toupper((unsigned char)c);
-        float fsz = size.y * 0.62f;
+        float fsz = std::min(22.0f, size.y * 0.62f);
         ImVec2 tsz = labelFont->CalcTextSizeA(fsz, FLT_MAX, 0.0f, up.c_str());
         ImVec2 tp = { pos.x + (labelW - tsz.x) * 0.5f, pos.y + (size.y - tsz.y) * 0.5f };
         dl->AddText(labelFont, fsz, tp, fg, up.c_str());
     }
+    labelW += kGapPx;
 
     // ── Область самого пэда: viewBox 320×72 → оставшийся прямоугольник ────────
     ImVec2 padPos  = { pos.x + labelW, pos.y };

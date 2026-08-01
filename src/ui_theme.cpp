@@ -105,5 +105,7 @@ UiFonts LoadUiFonts(ImGuiIO& io) {
     f.uiMedium      = tryLoadFont(io, "assets/fonts/Inter-Medium.ttf", 16.0f);
     f.uiSemiBold    = tryLoadFont(io, "assets/fonts/Inter-SemiBold.ttf", 16.0f);
     f.uiBold        = tryLoadFont(io, "assets/fonts/Inter-Bold.ttf", 16.0f);
+    f.mono          = tryLoadFont(io, "assets/fonts/JetBrainsMono-Medium.ttf", 12.0f);
+    f.monoBold      = tryLoadFont(io, "assets/fonts/JetBrainsMono-Bold.ttf", 12.0f);
     return f;
 }

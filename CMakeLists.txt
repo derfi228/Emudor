@@ -86,6 +86,7 @@ add_executable(emudor
     src/cli.cpp
     src/ui_theme.cpp
     src/ui_pads.cpp
+    src/ui_i18n.cpp
 )
 
 if(WIN32 AND CMAKE_BUILD_TYPE STREQUAL "Release")
