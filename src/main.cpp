@@ -8,8 +8,25 @@
 
 #include <cstdio>
 
+#ifdef _WIN32
+#  define WIN32_LEAN_AND_MEAN
+#  ifdef _WIN32_WINNT
+#    undef _WIN32_WINNT
+#  endif
+#  define _WIN32_WINNT 0x0A00  // Windows 10 — нужен для DPI_AWARENESS_CONTEXT_*
+#  include <windows.h>
+#endif
+
 int main(int argc, char** argv)
 {
+#ifdef _WIN32
+    // Без этого Windows считает приложение "DPI-unaware" и растрово
+    // растягивает окно под масштаб экрана (125%/150%/...) — размытая картинка
+    // и вся вёрстка на основе реального winW/winH сбивается с толку. Per-
+    // Monitor-V2 — самый современный режим, есть с Windows 10 1703+.
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+#endif
+
     CliArgs args = parseCli(argc, argv);
 
     if (args.printHelp) {

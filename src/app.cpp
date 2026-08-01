@@ -29,6 +29,15 @@ using json   = nlohmann::json;
 // для перевода UiTheme-токенов в цвета ImGuiStyle/PushStyleColor.
 static ImVec4 ToVec4(ImU32 c) { return ImGui::ColorConvertU32ToFloat4(c); }
 
+// Instrument Serif (fonts_.display/displayItalic) физически не содержит
+// кириллицу (Google Fonts subsets: только latin/latin-ext) — для RU/ZH
+// показываем перевод через Inter вместо тофу-квадратов. Названия игр всегда
+// латиница (не переводятся), поэтому им этот хелпер не нужен.
+static ImFont* displayFontFor(Lang lang, const UiFonts& f) {
+    if (lang == Lang::RU || lang == Lang::ZH) return f.uiSemiBold ? f.uiSemiBold : f.ui;
+    return f.displayItalic ? f.displayItalic : f.ui;
+}
+
 // Вставляет пробел между символами UTF-8 строки (порт letter-spacing:.35em
 // для "PAUSED") — по кодовым точкам, а не байтам, чтобы не ломать кириллицу/CJK.
 static std::string spaceOutUtf8(const std::string& s) {
@@ -164,7 +173,7 @@ void App::init() {
         "Emudor",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         1280, 720,
-        SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN
+        SDL_WINDOW_RESIZABLE | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI
     );
     renderer_ = SDL_CreateRenderer(
         window_, -1,
@@ -619,7 +628,11 @@ void App::renderMainMenu() {
     {
         const char* logoText = "EMUDOR";
         ImFont* lf = fonts_.logo ? fonts_.logo : ImGui::GetFont();
-        float   logoSize = 46.0f;
+        // Порт CSS clamp(48px, 5.4vw, 76px) — растёт с шириной окна, раньше
+        // было жёстко зашито 46px (логотип выглядел мелким на широких окнах).
+        float   logoSize = winW * 0.054f;
+        if (logoSize < 48.0f) logoSize = 48.0f;
+        if (logoSize > 76.0f) logoSize = 76.0f;
         ImVec2  tsz = lf->CalcTextSizeA(logoSize, FLT_MAX, 0.0f, logoText);
         ImVec2  base = { winW * 0.5f - tsz.x * 0.5f, topY - 3.0f };
         float   k = logoSize / 76.0f;   // масштаб относительно эталонных 76px из CSS
@@ -692,7 +705,7 @@ void App::renderMainMenu() {
         if (n.find(filterLower) != std::string::npos) visible.push_back(i);
     }
     {
-        ImFont* df = fonts_.displayItalic ? fonts_.displayItalic : ImGui::GetFont();
+        ImFont* df = displayFontFor(lang_, fonts_);
         std::string count = std::to_string(visible.size());
         ImFont* uf = fonts_.uiSemiBold ? fonts_.uiSemiBold : ImGui::GetFont();
         ImVec2 p = {padX, toolbarY};
@@ -1029,13 +1042,16 @@ void App::renderSettings() {
         ImGui::PopStyleColor();
         return;
     }
-    // Заголовок "Settings" (курсив, Instrument Serif) + [X] закрыть
+    const I18nStrings& tr = GetI18n(lang_);
+
+    // Заголовок "Settings" (курсив, Instrument Serif — для RU/ZH откат на Inter,
+    // см. displayFontFor) + [X] закрыть
     {
-        ImFont* df = fonts_.displayItalic ? fonts_.displayItalic : ImGui::GetFont();
+        ImFont* df = displayFontFor(lang_, fonts_);
         if (df) ImGui::PushFont(df);
         ImGui::PushStyleColor(ImGuiCol_Text, ToVec4(theme_.accent));
         ImGui::SetWindowFontScale(df ? 1.0f : 1.4f);
-        ImGui::TextUnformatted("Settings");
+        ImGui::TextUnformatted(tr.settingsTip);
         ImGui::SetWindowFontScale(1.0f);
         ImGui::PopStyleColor();
         if (df) ImGui::PopFont();
@@ -1044,7 +1060,6 @@ void App::renderSettings() {
     if (ImGui::Button(u8"\xc3\x97##closeSettings", {30.0f, 30.0f})) showSettings_ = false;
     ImGui::Spacing(); ImGui::Spacing();
 
-    const I18nStrings& tr = GetI18n(lang_);
     ImDrawList* sdl = ImGui::GetWindowDrawList();
 
     // Section label ALL-CAPS mono + затухающая вправо линия (порт .section-label)

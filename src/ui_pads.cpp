@@ -36,17 +36,25 @@ void Letter(ImDrawList* dl, const Xf& xf, ImFont* font, float cx, float cy,
     dl->AddText(font, px, { p.x - sz.x * 0.5f, p.y - sz.y * 0.5f }, col, ch);
 }
 
-// Плюсообразный D-pad (упрощённо — острые углы вместо микро-скруглений,
-// незаметных на масштабе карточки).
+// Плюсообразный D-pad. ВАЖНО: крест — НЕВЫПУКЛАЯ фигура (вогнутые углы между
+// плечами), а ImDrawList::AddConvexPolyFilled корректно работает только с
+// выпуклыми многоугольниками — на невыпуклом даёт визуальные искажения
+// ("кривые крестовины"). Поэтому собираем крест из 5 прямоугольников
+// (центр + 4 плеча), каждый гарантированно выпуклый.
 void DPad(ImDrawList* dl, const Xf& xf, float cx, float cy, float scale, ImU32 color) {
     const float a = 4.4f * scale;   // полуширина плеча
     const float L = 14.0f * scale;  // длина от центра до кончика плеча
+    dl->AddRectFilled(xf(cx-a, cy-a), xf(cx+a, cy+a), color);   // центр
+    dl->AddRectFilled(xf(cx-a, cy-L), xf(cx+a, cy-a), color);   // вверх
+    dl->AddRectFilled(xf(cx-a, cy+a), xf(cx+a, cy+L), color);   // вниз
+    dl->AddRectFilled(xf(cx-L, cy-a), xf(cx-a, cy+a), color);   // влево
+    dl->AddRectFilled(xf(cx+a, cy-a), xf(cx+L, cy+a), color);   // вправо
+
     ImVec2 v[12] = {
         xf(cx-a, cy-L), xf(cx+a, cy-L), xf(cx+a, cy-a), xf(cx+L, cy-a),
         xf(cx+L, cy+a), xf(cx+a, cy+a), xf(cx+a, cy+L), xf(cx-a, cy+L),
         xf(cx-a, cy+a), xf(cx-L, cy+a), xf(cx-L, cy-a), xf(cx-a, cy-a),
     };
-    dl->AddConvexPolyFilled(v, 12, color);
     dl->AddPolyline(v, 12, IM_COL32(10,8,5,140), ImDrawFlags_Closed, 1.0f);
 }
 
