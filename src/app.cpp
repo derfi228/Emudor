@@ -663,7 +663,11 @@ void App::renderMainMenu() {
         dl->AddLine({c.x+dir.x*r, c.y+dir.y*r}, {c.x+dir.x*r*1.9f, c.y+dir.y*r*1.9f}, theme_.ink3, 1.8f);
     }
 
-    ImGui::SetCursorPos({searchX + 34.0f, topY + (btnSize - ImGui::GetFontSize())*0.5f});
+    // Центрируем ПО ВЫСОТЕ РЕАЛЬНОГО ВИДЖЕТА (текст + FramePadding.y*2), а не
+    // только по высоте текста — раньше не учитывали FramePadding, из-за чего
+    // поле съезжало вниз внутри пилюли.
+    float fieldH = ImGui::GetFontSize() + ImGui::GetStyle().FramePadding.y * 2.0f;
+    ImGui::SetCursorPos({searchX + 34.0f, topY + (btnSize - fieldH) * 0.5f});
     ImGui::SetNextItemWidth(searchW - 48.0f);
     ImGui::PushStyleColor(ImGuiCol_FrameBg,        ImVec4(0,0,0,0));
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0,0,0,0));
@@ -1149,7 +1153,10 @@ void App::renderSettings() {
 
     // ── Язык ──────────────────────────────────────────────────────────────────
     sectionLabel(tr.language);
-    static const Lang kLangs[5] = { Lang::EN, Lang::RU, Lang::ES, Lang::ZH, Lang::FR };
+    // 中文 намеренно не в списке — нет CJK-шрифта, весь текст превращался
+    // бы в тофу-квадраты (и сам ярлык языка, и всё остальное после выбора).
+    // Lang::ZH остаётся в коде (GetI18n/конфиг) на случай будущей поддержки.
+    static const Lang kLangs[4] = { Lang::EN, Lang::RU, Lang::ES, Lang::FR };
     std::vector<std::pair<const char*,bool>> langItems;
     for (Lang lg : kLangs) langItems.push_back({LangNativeName(lg), lang_ == lg});
     int langIdx = chipRow(langItems);
@@ -1705,7 +1712,10 @@ void App::loadConfig() {
             auto lg = j["lang"].get<std::string>();
             if      (lg=="ru") lang_ = Lang::RU;
             else if (lg=="es") lang_ = Lang::ES;
-            else if (lg=="zh") lang_ = Lang::ZH;
+            // "zh" намеренно не восстанавливаем — 中文 убран из выбора
+            // (нет CJK-шрифта), а если оставить его тут, старый конфиг с
+            // ранее сохранённым zh навсегда запер бы юзера в тофу-тексте
+            // без возможности переключиться обратно через UI.
             else if (lg=="fr") lang_ = Lang::FR;
             else                lang_ = Lang::EN;
         }

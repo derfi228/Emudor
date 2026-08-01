@@ -150,10 +150,20 @@ void DrawControllerPad(ImDrawList* dl, ImVec2 pos, ImVec2 size,
     labelW += kGapPx;
 
     // ── Область самого пэда: viewBox 320×72 → оставшийся прямоугольник ────────
+    // Единый масштаб по обеим осям + центрирование — порт SVG
+    // preserveAspectRatio="xMidYMid meet" из pads.js. Раньше sx/sy считались
+    // НЕЗАВИСИМО (padSize.x/320, padSize.y/72), а пропорции области (обычно
+    // widescreen ~2.6:1) сильно отличаются от viewBox (320:72 ≈ 4.44:1) —
+    // из-за этого все элементы пэда (в т.ч. D-pad) растягивались по вертикали.
     ImVec2 padPos  = { pos.x + labelW, pos.y };
     ImVec2 padSize = { size.x - labelW, size.y };
     if (padSize.x <= 1.0f) return;
-    Xf xf{ padPos, padSize.x / 320.0f, padSize.y / 72.0f };
+    float scale = std::min(padSize.x / 320.0f, padSize.y / 72.0f);
+    ImVec2 fitOrigin = {
+        padPos.x + (padSize.x - 320.0f * scale) * 0.5f,
+        padPos.y + (padSize.y - 72.0f  * scale) * 0.5f,
+    };
+    Xf xf{ fitOrigin, scale, scale };
 
     if (consoleId == "NES") {
         DPad(dl, xf, 50, 36, 1.05f, plastic);
