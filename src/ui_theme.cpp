@@ -102,10 +102,10 @@ UiFonts LoadUiFonts(ImGuiIO& io) {
     // 中文 сюда не входит — отдельный CJK-шрифт не тащим (см. память проекта).
     const ImWchar* cyr = io.Fonts->GetGlyphRangesCyrillic();
 
-    f.logo          = tryLoadFont(io, "assets/fonts/Anton-Regular.ttf", 64.0f, cyr);
-    f.logoSmall     = tryLoadFont(io, "assets/fonts/Anton-Regular.ttf", 34.0f, cyr);
-    f.display       = tryLoadFont(io, "assets/fonts/InstrumentSerif-Regular.ttf", 24.0f, cyr);
-    f.displayItalic = tryLoadFont(io, "assets/fonts/InstrumentSerif-Italic.ttf", 26.0f, cyr);
+    f.logo          = tryLoadFont(io, "assets/fonts/Anton-Regular.ttf", 76.0f, cyr);
+    f.logoSmall     = tryLoadFont(io, "assets/fonts/Anton-Regular.ttf", 38.0f, cyr);
+    f.display       = tryLoadFont(io, "assets/fonts/InstrumentSerif-Regular.ttf", 27.0f, cyr);
+    f.displayItalic = tryLoadFont(io, "assets/fonts/InstrumentSerif-Italic.ttf", 29.0f, cyr);
 
     // Oswald/Inter/JetBrains Mono доступны в google/fonts только как variable-
     // шрифты (единый файл на все начертания) — stb_truetype (бэкенд ImGui по
@@ -114,11 +114,11 @@ UiFonts LoadUiFonts(ImGuiIO& io) {
     // Это приемлемый компромисс: лучше единая насыщенность, чем разбитая
     // кодировка (см. память проекта — ранее пробовали web-сабсеты по
     // конкретным весам, они не гарантировали полный набор глифов).
-    f.label      = tryLoadFont(io, "assets/fonts/Oswald-Variable.ttf", 20.0f, cyr);
-    f.labelSm    = tryLoadFont(io, "assets/fonts/Oswald-Variable.ttf", 13.0f, cyr);
-    f.ui         = tryLoadFont(io, "assets/fonts/Inter-Variable.ttf", 16.0f, cyr);
+    f.label      = tryLoadFont(io, "assets/fonts/Oswald-Variable.ttf", 22.0f, cyr);
+    f.labelSm    = tryLoadFont(io, "assets/fonts/Oswald-Variable.ttf", 15.0f, cyr);
+    f.ui         = tryLoadFont(io, "assets/fonts/Inter-Variable.ttf", 18.0f, cyr);
     f.uiMedium   = f.uiSemiBold = f.uiBold = f.ui;
-    f.mono       = tryLoadFont(io, "assets/fonts/JetBrainsMono-Variable.ttf", 12.0f, cyr);
+    f.mono       = tryLoadFont(io, "assets/fonts/JetBrainsMono-Variable.ttf", 13.0f, cyr);
     f.monoBold   = f.mono;
     return f;
 }

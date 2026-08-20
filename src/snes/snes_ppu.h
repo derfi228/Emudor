@@ -110,6 +110,11 @@ private:
     struct ObjPixel { uint16_t color; uint8_t priority; };
     ObjPixel getObjPixel(int screenX, int screenY) const;
 
+    // Окна ($2123-$212B): попадает ли пиксель x в маску окна для слоя
+    // (0..3 = BG1..BG4, 4 = OBJ, 5 = Color). Слой с битом в TMW/TSW в маске
+    // НЕ рисуется на соответствующем экране.
+    bool inWindowMask(int layer, int x) const;
+
     // Вспомогательные методы
     int  bgBpp(int bgIdx) const;     // битов на пиксель для данного BG
     int  bgPaletteOffset(int bgIdx, uint8_t palNum) const;

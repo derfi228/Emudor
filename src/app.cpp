@@ -796,7 +796,7 @@ void App::renderMainMenu() {
         {
             ImFont* uf = fonts_.uiSemiBold ? fonts_.uiSemiBold : ImGui::GetFont();
             std::string label = entry.name.size() > 26 ? entry.name.substr(0,25)+u8"…" : entry.name;
-            gdl->AddText(uf, 14.0f, {coverP0.x+10.0f, coverP1.y-24.0f}, IM_COL32(255,255,255,245), label.c_str());
+            gdl->AddText(uf, 16.0f, {coverP0.x+10.0f, coverP1.y-26.0f}, IM_COL32(255,255,255,245), label.c_str());
         }
 
         // ── Полоса геймпада ──
@@ -1070,7 +1070,7 @@ void App::renderSettings() {
     auto sectionLabel = [&](const char* text) {
         ImGui::Spacing();
         ImFont* mf = fonts_.mono ? fonts_.mono : ImGui::GetFont();
-        float   fsz = 12.0f;
+        float   fsz = 13.0f;
         ImVec2  tsz = mf->CalcTextSizeA(fsz, FLT_MAX, 0.0f, text);
         ImVec2  p0  = ImGui::GetCursorScreenPos();
         sdl->AddText(mf, fsz, p0, theme_.ink3, text);
@@ -1088,7 +1088,7 @@ void App::renderSettings() {
     // Choice-чип с dot-индикатором (точный порт .choice/.dot)
     auto chip = [&](const char* label, bool selected) -> bool {
         ImFont* uf  = fonts_.ui ? fonts_.ui : ImGui::GetFont();
-        float   fsz = 14.0f;
+        float   fsz = 16.0f;
         ImVec2  tsz = uf->CalcTextSizeA(fsz, FLT_MAX, 0.0f, label);
         float   dotR = 7.0f, padX = 14.0f, padY = 8.0f, gap = 8.0f;
         float   w = padX*2.0f + dotR*2.0f + gap + tsz.x;
@@ -1123,7 +1123,9 @@ void App::renderSettings() {
         const float gapBetween = 10.0f;
         for (size_t i = 0; i < items.size(); ++i) {
             const char* label = items[i].first;
-            ImVec2 tsz = chipFont->CalcTextSizeA(14.0f, FLT_MAX, 0.0f, label);
+            // ВАЖНО: размер шрифта здесь должен совпадать с fsz внутри chip(),
+            // иначе расчёт ширины для переноса разойдётся с реальной отрисовкой.
+            ImVec2 tsz = chipFont->CalcTextSizeA(16.0f, FLT_MAX, 0.0f, label);
             float w = 14.0f*2.0f + 7.0f*2.0f + 8.0f + tsz.x;
             float h = tsz.y + 8.0f*2.0f;
             if (x > startX && x + w > rowRight) { x = startX; y += h + gapBetween; }
@@ -1185,10 +1187,10 @@ void App::renderSettings() {
             float ry = b0.y + i * rowH;
             if (i > 0) sdl->AddLine({b0.x+1.0f, ry}, {b1.x-1.0f, ry}, theme_.lineSoft, 1.0f);
 
-            sdl->AddText(nameFont, 14.0f, {b0.x + 14.0f, ry + (rowH-17.0f)*0.5f}, theme_.ink, names[i]);
+            sdl->AddText(nameFont, 16.0f, {b0.x + 14.0f, ry + (rowH-19.0f)*0.5f}, theme_.ink, names[i]);
 
             const char* keyName = SDL_GetKeyName(*keys[i]);
-            ImVec2 ksz  = mf->CalcTextSizeA(11.0f, FLT_MAX, 0.0f, keyName);
+            ImVec2 ksz  = mf->CalcTextSizeA(12.0f, FLT_MAX, 0.0f, keyName);
             float  kbdW = (ksz.x + 16.0f) > 30.0f ? (ksz.x + 16.0f) : 30.0f;
             float  kbdH = 20.0f;
             float  kbdX = b1.x - 14.0f - rebindW - 10.0f - kbdW;
@@ -1196,7 +1198,7 @@ void App::renderSettings() {
             ImVec2 kp1  = {kbdX + kbdW, kp0.y + kbdH};
             sdl->AddRectFilled(kp0, kp1, theme_.surface2, 5.0f);
             sdl->AddRect(kp0, kp1, theme_.line, 5.0f, 0, 1.0f);
-            sdl->AddText(mf, 11.0f, {kp0.x + (kbdW-ksz.x)*0.5f, kp0.y + (kbdH-ksz.y)*0.5f}, theme_.ink, keyName);
+            sdl->AddText(mf, 12.0f, {kp0.x + (kbdW-ksz.x)*0.5f, kp0.y + (kbdH-ksz.y)*0.5f}, theme_.ink, keyName);
 
             ImGui::PushID(i);
             ImGui::SetCursorScreenPos({b1.x - 14.0f - rebindW, ry + (rowH-rebindH)*0.5f});

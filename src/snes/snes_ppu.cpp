@@ -59,12 +59,14 @@ void SnesPPU::clock()
                         "[PPU f=%d] INIDISP=%02X OBSEL=%02X MODE(2105)=%02X TM=%02X TS=%02X "
                         "CGWSEL=%02X CGADSUB=%02X COLDATA(int)=%04X | "
                         "BG12NBA=%02X BG34NBA=%02X SC1=%02X SC2=%02X SC3=%02X SC4=%02X | "
-                        "W12SEL=%02X W34SEL=%02X WOBJSEL=%02X TMW=%02X TSW=%02X\n",
+                        "W12SEL=%02X W34SEL=%02X WOBJSEL=%02X TMW=%02X TSW=%02X "
+                        "WH=[%u..%u][%u..%u] WBGLOG=%02X\n",
                         fc, regs_[0x00], regs_[0x01], regs_[0x05], regs_[0x2C], regs_[0x2D],
                         regs_[0x30], regs_[0x31], coldata_,
                         regs_[0x0B], regs_[0x0C], regs_[0x07], regs_[0x08],
                         regs_[0x09], regs_[0x0A],
-                        regs_[0x23], regs_[0x24], regs_[0x25], regs_[0x2E], regs_[0x2F]);
+                        regs_[0x23], regs_[0x24], regs_[0x25], regs_[0x2E], regs_[0x2F],
+                        regs_[0x26], regs_[0x27], regs_[0x28], regs_[0x29], regs_[0x2A]);
             }
         }
         if (scanline_ >= 262) {
@@ -401,6 +403,46 @@ int SnesPPU::bgBpp(int bgIdx) const
         return 2;
     case 7: return 8;  // Mode 7
     default: return 2;
+    }
+}
+
+// ─── Окна PPU ($2123-$212B) ──────────────────────────────────────────────────
+// Два окна-диапазона по X (W1: $2126-$2127, W2: $2128-$2129). Для каждого слоя
+// в W12SEL/W34SEL/WOBJSEL задано, участвует ли окно и инвертировано ли оно;
+// два окна комбинируются логикой из WBGLOG/WOBJLOG (OR/AND/XOR/XNOR).
+// Игры вырезают окнами куски слоёв: без этого, например, фон титульника Mario
+// Kart закрывает спрайтовое меню "1P GAME/2P GAME".
+bool SnesPPU::inWindowMask(int layer, int x) const
+{
+    uint8_t sel;
+    int     shift;
+    if      (layer < 2) { sel = regs_[0x23]; shift = layer * 4; }        // W12SEL
+    else if (layer < 4) { sel = regs_[0x24]; shift = (layer - 2) * 4; }  // W34SEL
+    else                { sel = regs_[0x25]; shift = (layer - 4) * 4; }  // WOBJSEL
+
+    bool w1inv = (sel >> (shift + 0)) & 1;
+    bool w1en  = (sel >> (shift + 1)) & 1;
+    bool w2inv = (sel >> (shift + 2)) & 1;
+    bool w2en  = (sel >> (shift + 3)) & 1;
+
+    if (!w1en && !w2en) return false;   // окна не участвуют — слой не режется
+
+    // Пустое окно (left > right) не покрывает ничего; инверсия делает его полным.
+    bool in1 = w1en && (x >= (int)regs_[0x26] && x <= (int)regs_[0x27]);
+    bool in2 = w2en && (x >= (int)regs_[0x28] && x <= (int)regs_[0x29]);
+    if (w1en && w1inv) in1 = !in1;
+    if (w2en && w2inv) in2 = !in2;
+
+    if (!w2en) return in1;
+    if (!w1en) return in2;
+
+    uint8_t logReg = (layer < 4) ? regs_[0x2A] : regs_[0x2B];
+    int     lshift = (layer < 4) ? (layer * 2) : ((layer - 4) * 2);
+    switch ((logReg >> lshift) & 3) {
+        case 0:  return in1 || in2;   // OR
+        case 1:  return in1 && in2;   // AND
+        case 2:  return in1 != in2;   // XOR
+        default: return in1 == in2;   // XNOR
     }
 }
 
@@ -768,7 +810,8 @@ void SnesPPU::renderScanline(int y)
         uint32_t finalColor = cgToRGBA(cgram_[0], brightness);  // backdrop
 
         if (mode == 7) {
-            if (mainEn & 1) {
+            bool m7Masked = (regs_[0x2E] & 1) && inWindowMask(0, x);
+            if ((mainEn & 1) && !m7Masked) {
                 BgPixel bp = getMode7Pixel(x, y);
                 if (bp.color != 0)
                     finalColor = cgToRGBA(cgram_[bp.color], brightness);
@@ -780,6 +823,8 @@ void SnesPPU::renderScanline(int y)
             Layer subLs[16];  int subN  = 0;
 
             uint8_t subEnReg = regs_[0x2D];   // TS
+            uint8_t mainWin  = regs_[0x2E];   // TMW: какие слои режет окно на main
+            uint8_t subWin   = regs_[0x2F];   // TSW: то же для sub-экрана
 
             // ── Mosaic ($2106): биты 4-7 = размер (1..16), биты 0-3 = какие BG ──
             // Пиксель берёт цвет из левого-верхнего угла своего мозаик-блока.
@@ -798,9 +843,11 @@ void SnesPPU::renderScanline(int y)
                 BgPixel bp = getBGPixel(bgIdx, mx, my);
                 if (bp.color == 0) return;
                 int p = bp.priority ? hiP : loP;
-                if (mainEn   & (1 << bgIdx))
+                bool masked = ((mainWin | subWin) & (1 << bgIdx))
+                              && inWindowMask(bgIdx, x);
+                if ((mainEn   & (1 << bgIdx)) && !(masked && (mainWin & (1 << bgIdx))))
                     mainLs[mainN++] = { cgram_[bp.color], p, (uint8_t)bgIdx, false };
-                if (subEnReg & (1 << bgIdx))
+                if ((subEnReg & (1 << bgIdx)) && !(masked && (subWin & (1 << bgIdx))))
                     subLs[subN++]   = { cgram_[bp.color], p, (uint8_t)bgIdx, false };
             };
             // Приоритеты (выше = ближе к зрителю) по официальному порядку Mode 1:
@@ -814,8 +861,11 @@ void SnesPPU::renderScanline(int y)
                 if (bp.color != 0) {
                     bool bg3Hi = (regs_[0x05] & 0x08) != 0;
                     int p = bp.priority ? (bg3Hi ? 11 : 3) : 1;
-                    if (mainEn   & 4) mainLs[mainN++] = { cgram_[bp.color], p, 2, false };
-                    if (subEnReg & 4) subLs[subN++]   = { cgram_[bp.color], p, 2, false };
+                    bool masked3 = ((mainWin | subWin) & 4) && inWindowMask(2, x);
+                    if ((mainEn   & 4) && !(masked3 && (mainWin & 4)))
+                        mainLs[mainN++] = { cgram_[bp.color], p, 2, false };
+                    if ((subEnReg & 4) && !(masked3 && (subWin & 4)))
+                        subLs[subN++]   = { cgram_[bp.color], p, 2, false };
                 }
             }
             pushBG(3, 0, 1);   // BG4 (только Mode 0)
@@ -857,8 +907,11 @@ void SnesPPU::renderScanline(int y)
                     if (colorIdx == 0) continue;
                     uint8_t cgramIdx = (uint8_t)(0x80 + pal * 16 + colorIdx);
                     Layer L = { cgram_[cgramIdx], kObjPrio[pri & 3], 4, (pal >= 4) };
-                    if (mainEn   & 0x10) mainLs[mainN++] = L;
-                    if (subEnReg & 0x10) subLs[subN++]   = L;
+                    bool maskedObj = ((mainWin | subWin) & 0x10) && inWindowMask(4, x);
+                    if ((mainEn   & 0x10) && !(maskedObj && (mainWin & 0x10)))
+                        mainLs[mainN++] = L;
+                    if ((subEnReg & 0x10) && !(maskedObj && (subWin & 0x10)))
+                        subLs[subN++]   = L;
                     break;
                 }
             }
