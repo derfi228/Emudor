@@ -588,6 +588,15 @@ void App::renderMainMenu() {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     const I18nStrings& tr = GetI18n(lang_);
 
+    // ── Фон: мягкое диагональное свечение (порт body::before radial-gradient).
+    // Плоская заливка читается как «неоформленная»; лёгкий градиент от bg-2 в
+    // верхнем правом углу к bg внизу-слева даёт глубину, не отвлекая от карточек.
+    dl->AddRectFilledMultiColor({0.0f, 0.0f}, {(float)winW, (float)winH},
+        theme_.bg, theme_.bg2, theme_.bg, theme_.bg);
+    dl->AddRectFilledMultiColor({winW * 0.45f, 0.0f}, {(float)winW, winH * 0.5f},
+        theme_.accentGlow & 0x00FFFFFFu, (theme_.accentGlow & 0x00FFFFFFu) | 0x14000000u,
+        theme_.accentGlow & 0x00FFFFFFu, theme_.accentGlow & 0x00FFFFFFu);
+
     // ── Шапка (header.app-bar): [+] [↻]   EMUDOR   [поиск] [⚙] ────────────────
     const float padX    = 40.0f;
     const float topY    = 22.0f;
@@ -724,7 +733,8 @@ void App::renderMainMenu() {
     // ── Скроллируемая область сетки (порт main{overflow-y:auto}) ──────────────
     // Шапка/тулбар выше остаются неподвижны — скроллится только сама библиотека.
     ImGui::SetCursorPos({0.0f, lineY + 1.0f});
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ToVec4(theme_.bg));
+    // Прозрачный фон у сетки — чтобы был виден градиент окна под ней
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
     ImGui::BeginChild("##libraryGrid", {(float)winW, (float)winH - lineY - 1.0f}, false);
     ImDrawList* gdl = ImGui::GetWindowDrawList();
     ImVec2 gridOrigin = ImGui::GetCursorScreenPos();
@@ -757,7 +767,26 @@ void App::renderMainMenu() {
         ImVec2 coverP0 = p0, coverP1 = {p1.x, p0.y + coverH};
         ImVec2 padP0   = {p0.x, coverP1.y}, padP1 = p1;
 
+        // ── Тень под карточкой (порт --shadow-card; ImGui не умеет box-shadow,
+        // поэтому кладём 4 расширяющихся контура с падающей альфой). На ховере
+        // тень растёт и окрашивается акцентом — это и есть --accent-glow.
+        {
+            ImU32 shadowBase = hovered ? theme_.accent : IM_COL32(60, 36, 18, 255);
+            int   layers     = hovered ? 7 : 4;
+            for (int s = layers; s >= 1; --s) {
+                float grow  = (float)s * 1.6f;
+                int   alpha = (hovered ? 26 : 15) - s * 2;
+                if (alpha <= 0) continue;
+                gdl->AddRect({p0.x - grow, p0.y - grow + 2.0f},
+                             {p1.x + grow, p1.y + grow + 3.0f},
+                             (shadowBase & 0x00FFFFFFu) | ((ImU32)alpha << 24),
+                             cornerR + grow, 0, 1.6f);
+            }
+        }
+
         gdl->PushClipRect(p0, p1, true);
+        // Подложка карточки — чтобы скруглённые углы не показывали фон сетки
+        gdl->AddRectFilled(p0, p1, theme_.surface, cornerR);
 
         // ── Обложка ──
         if (entry.cover) {
@@ -769,12 +798,17 @@ void App::renderMainMenu() {
             float fitW   = texW * scale, fitH = texH * scale;
             float u0 = (fitW - (coverP1.x-coverP0.x)) / (2.0f * fitW);
             float v0 = (fitH - (coverP1.y-coverP0.y)) / (2.0f * fitH);
-            gdl->AddImage((ImTextureID)(intptr_t)entry.cover,
-                coverP0, coverP1, {u0, v0}, {1.0f-u0, 1.0f-v0});
+            // Скругляем ТОЛЬКО верхние углы — низ упирается в полосу геймпада
+            gdl->AddImageRounded((ImTextureID)(intptr_t)entry.cover,
+                coverP0, coverP1, {u0, v0}, {1.0f-u0, 1.0f-v0},
+                IM_COL32_WHITE, cornerR, ImDrawFlags_RoundCornersTop);
         } else {
             ImU32 c1, c2;
             placeholderGradient(entry.name, c1, c2);
-            gdl->AddRectFilledMultiColor(coverP0, coverP1, c1, c1, c2, c2);
+            gdl->PushClipRect(coverP0, coverP1, true);
+            gdl->AddRectFilled(coverP0, coverP1, c1, cornerR, ImDrawFlags_RoundCornersTop);
+            gdl->AddRectFilledMultiColor({coverP0.x, coverP0.y + cornerR}, coverP1, c1, c1, c2, c2);
+            gdl->PopClipRect();
             ImFont* df = fonts_.displayItalic ? fonts_.displayItalic : ImGui::GetFont();
             ImFont* lf = fonts_.label ? fonts_.label : ImGui::GetFont();
             std::string title = entry.name;
@@ -799,17 +833,27 @@ void App::renderMainMenu() {
             gdl->AddText(uf, 16.0f, {coverP0.x+10.0f, coverP1.y-26.0f}, IM_COL32(255,255,255,245), label.c_str());
         }
 
-        // ── Полоса геймпада ──
+        // ── Полоса геймпада (скругление только по низу карточки) ──
         const auto& tint = padTintFor(theme_, entry.console);
-        gdl->AddRectFilled(padP0, padP1, tint.bg);
+        gdl->AddRectFilled(padP0, padP1, tint.bg, cornerR, ImDrawFlags_RoundCornersBottom);
+        gdl->AddLine(padP0, {padP1.x, padP0.y}, theme_.line, 1.0f);
         DrawControllerPad(gdl, {padP0.x, padP0.y}, {padP1.x-padP0.x, padP1.y-padP0.y},
                            entry.console, tint.fg, fonts_.label);
 
-        // Рамка карточки + ховер-подсветка
+        // Ховер: тёплое свечение поверх обложки (порт .card::after radial-gradient)
+        if (hovered)
+            gdl->AddRectFilledMultiColor(coverP0, {coverP1.x, coverP0.y + coverH*0.6f},
+                (theme_.accentGlow & 0x00FFFFFFu) | 0x22000000u,
+                (theme_.accentGlow & 0x00FFFFFFu) | 0x22000000u,
+                theme_.accentGlow & 0x00FFFFFFu,
+                theme_.accentGlow & 0x00FFFFFFu);
+
+        // Рамка карточки + внутренний блик по верхней кромке (inset highlight
+        // из --shadow-card: он и создаёт ощущение приподнятой поверхности)
         ImU32 borderCol = hovered ? theme_.accentSoft : theme_.line;
         gdl->AddRect(p0, p1, borderCol, cornerR, 0, hovered ? 1.6f : 1.0f);
-        if (hovered)
-            gdl->AddRectFilled(coverP0, coverP1, (theme_.accentGlow & 0x00FFFFFFu) | 0x18000000u, 0);
+        gdl->AddLine({p0.x + cornerR, p0.y + 1.0f}, {p1.x - cornerR, p0.y + 1.0f},
+                     IM_COL32(255, 255, 255, 60), 1.0f);
 
         gdl->PopClipRect();
 
