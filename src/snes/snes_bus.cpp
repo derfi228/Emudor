@@ -198,6 +198,14 @@ uint8_t SnesBus::readInternal(uint32_t addr)
         return wram_[off];
     }
 
+    // ── Game-pak RAM SuperFX: банки $70-$71 (и зеркало $F0-$F1) ─────────────
+    // У CPU и у GSU это ОДНА память: CPU кладёт туда данные и забирает готовый
+    // кадр, GSU по ней считает. Раньше у них были разные буферы, и GSU видел
+    // пустую RAM — Star Fox не запускался.
+    if (hasSuperFX_ && ((bank >= 0x70 && bank <= 0x71) || (bank >= 0xF0 && bank <= 0xF1))) {
+        return gsu_.readRam((uint32_t)(((bank & 1) << 16) | off));
+    }
+
     // ── DSP-1: адреса зависят от типа картриджа (см. dsp1Select) ─────────────
     if (hasDSP1_) {
         int sel = dsp1Select(bank, off);
@@ -256,6 +264,12 @@ void SnesBus::write(uint32_t addr, uint8_t data)
     // ── Системные регистры I/O ────────────────────────────────────────────────
     if ((bank <= 0x3F || (bank >= 0x80 && bank <= 0xBF)) && off >= 0x2000 && off <= 0x5FFF) {
         writeIO(off, data);
+        return;
+    }
+
+    // ── Game-pak RAM SuperFX: та же память, что видит GSU ───────────────────
+    if (hasSuperFX_ && ((bank >= 0x70 && bank <= 0x71) || (bank >= 0xF0 && bank <= 0xF1))) {
+        gsu_.writeRam((uint32_t)(((bank & 1) << 16) | off), data);
         return;
     }
 

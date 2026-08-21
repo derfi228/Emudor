@@ -302,9 +302,10 @@ void SuperFX::step()
     // $60-$6F: SUB/SBC/CMP
     if (op >= 0x60 && op <= 0x6F) {
         uint8_t n = op & 15;
-        uint32_t b = (alt_ & 2) ? n : r_[n];
+        // ALT2 → непосредственное; ALT3 это CMP, он сравнивает с РЕГИСТРОМ
+        uint32_t b = (alt_ == 2) ? n : r_[n];
         uint32_t s = src();
-        uint32_t cin = ((alt_ & 1) && !(sfr_ & SFR_CY)) ? 1 : 0;  // ALT1 → SBC
+        uint32_t cin = ((alt_ == 1) && !(sfr_ & SFR_CY)) ? 1 : 0;  // ALT1 → SBC
         uint32_t res = s - b - cin;
         sfr_ &= ~(SFR_CY|SFR_OV);
         if (!(res & 0x10000)) sfr_ |= SFR_CY;     // нет заёма
@@ -390,15 +391,15 @@ void SuperFX::step()
         if (alt_ == 0) {        // IBT Rn,#imm
             int8_t imm = (int8_t)fetchOpcode();
             r_[n] = (uint16_t)(int16_t)imm;
-        } else if (alt_ & 1) {  // SMS (RAM store word, addr = imm*2)
+        } else if (alt_ & 1) {  // LMS Rn,(yy) — короткая загрузка из RAM
+            uint8_t a = fetchOpcode();
+            uint32_t addr = (uint32_t)((rambr_ << 16) | (a << 1));
+            r_[n] = (uint16_t)(ramReadByte(addr) | (ramReadByte(addr + 1) << 8));
+        } else {                // SMS (yy),Rn — короткое сохранение в RAM
             uint8_t a = fetchOpcode();
             uint32_t addr = (uint32_t)((rambr_ << 16) | (a << 1));
             ramWriteByte(addr,     (uint8_t)r_[n]);
             ramWriteByte(addr + 1, (uint8_t)(r_[n] >> 8));
-        } else {                // LMS
-            uint8_t a = fetchOpcode();
-            uint32_t addr = (uint32_t)((rambr_ << 16) | (a << 1));
-            r_[n] = (uint16_t)(ramReadByte(addr) | (ramReadByte(addr+1) << 8));
         }
         resetPrefix(); return;
     }
@@ -431,8 +432,8 @@ void SuperFX::step()
     }
     if (op == 0xDF) { // GETC / RAMB / ROMB
         if (alt_ == 0)      colr_ = romBufByte_;          // GETC
-        else if (alt_ & 1)  rombr_ = (uint8_t)src();      // ROMB
-        else                rambr_ = (uint8_t)src();      // RAMB
+        else if (alt_ & 1)  rambr_ = (uint8_t)src();      // RAMB — банк RAM
+        else                rombr_ = (uint8_t)src();      // ROMB — банк ROM
         resetPrefix(); return;
     }
     // $E0-$EE: DEC Rn
@@ -455,15 +456,15 @@ void SuperFX::step()
         if (alt_ == 0) {        // IWT Rn,#imm16
             uint8_t lo = fetchOpcode(), hi = fetchOpcode();
             r_[n] = (uint16_t)(lo | (hi << 8));
-        } else if (alt_ & 1) {  // SM (RAM store word, addr from next word)
+        } else if (alt_ & 1) {  // LM Rn,(xx) — загрузка из RAM по адресу-слову
+            uint8_t lo = fetchOpcode(), hi = fetchOpcode();
+            uint32_t addr = (uint32_t)((rambr_ << 16) | (lo | (hi << 8)));
+            r_[n] = (uint16_t)(ramReadByte(addr) | (ramReadByte(addr + 1) << 8));
+        } else {                // SM (xx),Rn — сохранение в RAM
             uint8_t lo = fetchOpcode(), hi = fetchOpcode();
             uint32_t addr = (uint32_t)((rambr_ << 16) | (lo | (hi << 8)));
             ramWriteByte(addr,     (uint8_t)r_[n]);
             ramWriteByte(addr + 1, (uint8_t)(r_[n] >> 8));
-        } else {                // LM
-            uint8_t lo = fetchOpcode(), hi = fetchOpcode();
-            uint32_t addr = (uint32_t)((rambr_ << 16) | (lo | (hi << 8)));
-            r_[n] = (uint16_t)(ramReadByte(addr) | (ramReadByte(addr+1) << 8));
         }
         resetPrefix(); return;
     }
