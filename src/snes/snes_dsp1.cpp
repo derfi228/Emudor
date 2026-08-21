@@ -33,7 +33,7 @@ void SnesDSP1::reset()
     std::memset(outBuf_, 0, sizeof outBuf_);
     std::memset(mat_,    0, sizeof mat_);
     fx_ = fy_ = fz_ = 0.0;
-    lfe_ = 0.0; hgt_ = 0.0; vof_ = 0.0;
+    lfe_ = 0.0; les_ = 0.0; hgt_ = 0.0; vof_ = 0.0; rasterVs_ = 0;
     nx_ = 0; ny_ = 0; nz_ = 1;
     gx_ = 0; gy_ = 1; gz_ = 0;
     hx_ = 1; hy_ = 0;
@@ -50,7 +50,13 @@ uint8_t SnesDSP1::readDR()
 {
     if (outIndex_ < outBytes_) {
         uint8_t v = outBuf_[outIndex_++];
-        if (outIndex_ >= outBytes_) outIndex_ = outBytes_ = 0;
+        if (outIndex_ >= outBytes_) {
+            outIndex_ = outBytes_ = 0;
+            // Raster работает потоком: игра пишет команду ОДИН раз и читает
+            // подряд матрицы всех строк, поэтому после каждой выдачи сразу
+            // готовим следующую строку.
+            if ((command_ & 0x3F) == 0x0A) { ++rasterVs_; rasterOut(); }
+        }
         return v;
     }
     return 0x00;
@@ -226,6 +232,7 @@ void SnesDSP1::exec()
         fx_  = arg(0); fy_ = arg(1); fz_ = arg(2);
         lfe_ = arg(3);
         double les = arg(4);
+        les_ = les;
         double aas = angRad(arg(5));       // азимут (поворот вокруг вертикали)
         double azs = angRad(arg(6));       // зенитный угол (отсчёт от вертикали)
 
@@ -260,14 +267,8 @@ void SnesDSP1::exec()
     // Луч из точки обзора через строку Vs пересекает землю на расстоянии t;
     // производные точки пересечения по экранным осям и есть A/B/C/D.
     case 0x0A: case 0x1A: case 0x2A: case 0x3A: {
-        double v  = (double)arg(0) + vof_;
-        double dz = lfe_ * nz_ + v * gz_;
-        double t  = (dz != 0.0) ? (hgt_ / dz) : 0.0;
-        setOut(4);
-        put(0, sat16( t * hx_ * kQ8));   // An = du/dx
-        put(1, sat16(-t * gx_ * kQ8));   // Bn = du/dy (экранный y растёт вниз)
-        put(2, sat16( t * hy_ * kQ8));   // Cn = dv/dx
-        put(3, sat16(-t * gy_ * kQ8));   // Dn = dv/dy
+        rasterVs_ = arg(0);
+        rasterOut();
         break;
     }
 
@@ -365,3 +366,22 @@ void SnesDSP1::exec()
         break;
     }
 }
+
+// ─── Матрица Mode 7 для строки rasterVs_ ─────────────────────────────────────
+// Луч из точки обзора через строку пересекает землю на расстоянии t;
+// производные точки пересечения по экранным осям и есть A/B/C/D.
+void SnesDSP1::rasterOut()
+{
+    // Номер строки растёт ВНИЗ по экрану, а ось g_ смотрит вверх — отсюда минус.
+    // Плоскость проекции стоит на расстоянии Les (в её центре масштаб ровно 1:1),
+    // поэтому вертикаль луча считается от Les, а не от Lfe.
+    double v  = -((double)rasterVs_ + vof_);
+    double dz = les_ * nz_ + v * gz_;
+    double t  = (dz != 0.0) ? (hgt_ / dz) : 0.0;
+    setOut(4);
+    put(0, sat16( t * hx_ * kQ8));   // An = du/dx
+    put(1, sat16(-t * gx_ * kQ8));   // Bn = du/dy (экранный y растёт вниз)
+    put(2, sat16( t * hy_ * kQ8));   // Cn = dv/dx
+    put(3, sat16(-t * gy_ * kQ8));   // Dn = dv/dy
+}
+

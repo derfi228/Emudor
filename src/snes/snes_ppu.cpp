@@ -587,19 +587,20 @@ SnesPPU::BgPixel SnesPPU::getMode7Pixel(int screenX, int screenY) const
     ox += cx;
     oy += cy;
 
-    // $211A M7SEL: bit7=vFlip, bit6=hFlip, bits[1:0]=overflow режим
+    // $211A M7SEL: bit0=зеркало по X, bit1=зеркало по Y, биты 7:6 = screen over
+    // (0x/00 = заворачивать карту, 10 = прозрачно, 11 = заполнять тайлом 0).
     uint8_t m7sel = regs_[0x1A];
-    if (m7sel & 0x40) ox = ~ox;
-    if (m7sel & 0x80) oy = ~oy;
+    if (m7sel & 0x01) ox = ~ox;
+    if (m7sel & 0x02) oy = ~oy;
 
     bool outOfMap = ((unsigned)ox >= 1024u) || ((unsigned)oy >= 1024u);
-    uint8_t overflowMode = (uint8_t)(m7sel & 3);
+    uint8_t overflowMode = (uint8_t)((m7sel >> 6) & 3);
     if (outOfMap) {
-        if (overflowMode == 3) {
+        if (overflowMode == 2) {
             BgPixel r{0, false};  // прозрачно
             return r;
         }
-        if (overflowMode == 2) {
+        if (overflowMode == 3) {
             // Tile 0: показываем character 0 для overflow-региона
             ox &= 7;
             oy &= 7;
@@ -614,7 +615,7 @@ SnesPPU::BgPixel SnesPPU::getMode7Pixel(int screenX, int screenY) const
     uint8_t  tileX   = (uint8_t)((ox >> 3) & 0x7F);
     uint8_t  tileY   = (uint8_t)((oy >> 3) & 0x7F);
     uint16_t mapAddr = (uint16_t)(tileY * 128 + tileX);
-    uint8_t  tileNum = (overflowMode == 2 && outOfMap) ? 0 : (uint8_t)(vram_[mapAddr] & 0xFF);
+    uint8_t  tileNum = (overflowMode == 3 && outOfMap) ? 0 : (uint8_t)(vram_[mapAddr] & 0xFF);
 
     // Данные тайла: пиксель в hi-байте, 8×8 = 64 слова на тайл
     int px = ox & 7;

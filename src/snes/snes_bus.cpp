@@ -698,22 +698,16 @@ void SnesBus::runHDMA()
     if (!hdmaen_) return;
 
     if (hdmaInit_) {
-        // Загружаем начальное состояние для каждого активного канала
+        // Сбрасываем указатель таблицы на её начало. Сам первый NTRL здесь НЕ
+        // читаем: его загрузит execHDMACh, и только так первая строка первой
+        // группы получит передачу. Иначе она уходит в ветку «внутри группы» и
+        // вся первая группа теряется (у Mario Kart это была строка с Mode 7).
         for (int ch = 0; ch < 8; ++ch) {
             if (!(hdmaen_ & (1 << ch))) continue;
-            DmaChannel& d = dma_[ch];
-            d.a2a         = d.a1t;
-            d.hdmaFinished= false;
-            bool indirect = (d.dmap & 0x40) != 0;
-            // Читаем первый NTRL из таблицы
-            d.ntrl = read((uint32_t)((d.a1b << 16) | d.a2a++));
-            if (d.ntrl == 0) { d.hdmaFinished = true; continue; }
-            if (indirect) {
-                // Косвенный режим: после NTRL следует 2-байтовый адрес данных
-                uint8_t lo = read((uint32_t)((d.a1b << 16) | d.a2a++));
-                uint8_t hi = read((uint32_t)((d.a1b << 16) | d.a2a++));
-                d.das = (uint16_t)(lo | (hi << 8));
-            }
+            DmaChannel& d  = dma_[ch];
+            d.a2a          = d.a1t;
+            d.ntrl         = 0;      // 0 → execHDMACh загрузит NTRL и передаст
+            d.hdmaFinished = false;
         }
         hdmaInit_ = false;
     }

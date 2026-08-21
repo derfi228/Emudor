@@ -33,6 +33,7 @@ private:
     void    setOut(int words);            // подготовить N слов результата
     void    put(int i, int16_t v);        // записать слово результата i
     void    exec();                       // выполнить накопленную команду
+    void    rasterOut();                  // матрица Mode 7 для строки rasterVs_
 
     // Число входных слов команды; 0xFF = команда неизвестна
     static uint8_t cmdInWords(uint8_t cmd);
@@ -42,8 +43,10 @@ private:
     //   n_ — направление взгляда, g_ — «вверх» по экрану, h_ — «вправо».
     double  fx_ = 0, fy_ = 0, fz_ = 0;    // положение точки обзора
     double  lfe_ = 0;                     // фокусное расстояние
+    double  les_ = 0;                     // расстояние до плоскости проекции
     double  hgt_ = 0;                     // высота точки обзора над плоскостью земли
     double  vof_ = 0;                     // вертикальное смещение растра
+    int16_t rasterVs_ = 0;                // текущая строка потокового Raster
     double  nx_ = 0, ny_ = 0, nz_ = 1;
     double  gx_ = 0, gy_ = 1, gz_ = 0;
     double  hx_ = 1, hy_ = 0;
