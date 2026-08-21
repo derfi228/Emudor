@@ -15,7 +15,7 @@ MSYS2 MinGW64, GCC 16, CMake 4.3, Ninja 1.13.
   - **Звук работает**: SPC700 (полный набор опкодов) + DSP (настоящий BRR ADPCM,
     8 голосов, огибающие, микс). Синхронизация — co-scheduler по мастер-такту.
     Звучат: Super Mario World, Zelda, Super Mario Kart. Молчат: EarthBound (KON не
-    выставляется), Super Street Fighter II (SPC застрял в IPL). Эха (echo/FIR) нет.
+    выставляется), Super Street Fighter II (драйвер грузится, но тишина). Эха (echo/FIR) нет.
   - **DSP-1** — минимальная заглушка (Mario Kart грузится, меню/музыка ок; трассы нет).
   - **SuperFX/GSU** — каркас есть, часть GSU-тест-ROM падает/чёрный экран.
   - Не сделано: цветовая математика (color math/прозрачность) частично, эхо DSP,
