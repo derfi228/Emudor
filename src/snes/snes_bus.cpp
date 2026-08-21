@@ -651,10 +651,11 @@ void SnesBus::execGDMACh(int ch)
             write(aAddr, val);
         }
 
-        // A-шина: инкремент, декремент или фиксированная
+        // A-шина: инкремент, декремент или фиксированная.
+        // Банк НЕ меняется — адрес крутится внутри своих 16 бит (как на железе).
         uint8_t aStep = (d.dmap >> 3) & 3;
-        if      (aStep == 0) ++aAddr;
-        else if (aStep == 2) --aAddr;
+        if      (aStep == 0) aAddr = (aAddr & 0xFF0000u) | ((aAddr + 1) & 0xFFFFu);
+        else if (aStep == 2) aAddr = (aAddr & 0xFF0000u) | ((aAddr - 1) & 0xFFFFu);
         // aStep 1 = fixed, 3 = fixed
 
         --count;

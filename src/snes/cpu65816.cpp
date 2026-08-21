@@ -850,7 +850,9 @@ void CPU65816::op_ROR_a() {
     uint8_t oldC = (uint8_t)(P & FLAG_C);
     if (flagM()) {
         setFlag(FLAG_C, (A & 0x01) != 0);
-        A = (uint16_t)((A & 0xFF00) | (((A >> 1) | (oldC << 7)) & 0xFF));
+        // В 8-битном режиме сдвигать нужно ТОЛЬКО младший байт: иначе бит 8
+        // (младший бит скрытого регистра B) протекает в бит 7 результата.
+        A = (uint16_t)((A & 0xFF00) | ((((A & 0xFF) >> 1) | (oldC << 7)) & 0xFF));
         setNZ8((uint8_t)(A & 0xFF));
     } else {
         setFlag(FLAG_C, (A & 0x0001) != 0);

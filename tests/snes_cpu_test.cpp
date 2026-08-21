@@ -167,3 +167,33 @@ TEST_F(SnesCpuTest, JSR_RTS) {
     step();  // RTS → PC=$8003
     EXPECT_EQ(cpu.PC, 0x8003u);
 }
+
+// ─── ROR A в 8-битном режиме не должен трогать скрытый регистр B ─────────────
+// Регрессия EarthBound: сдвигался весь 16-битный аккумулятор, поэтому бит 8
+// (младший бит B) протекал в бит 7 результата и распаковщик графики выдавал
+// $FF вместо реальных байт (белые блоки на титульном экране).
+TEST_F(SnesCpuTest, ROR_Accumulator8Bit_IgnoresHiddenB) {
+    // native mode, A 8-битный: CLC, XCE, SEP #$20
+    bus.writeCode(0x8000, { 0x18, 0xFB, 0xE2, 0x20, 0x18, 0x6A });
+    step(4);
+    ASSERT_FALSE(cpu.E);
+    ASSERT_TRUE(cpu.P & CPU65816::FLAG_M);
+
+    cpu.A = 0x03FD;      // B=$03 (его бит 0 = 1), A=$FD
+    step();              // CLC — переносим 0
+    step();              // ROR A
+    EXPECT_EQ(cpu.A & 0x00FF, 0x7Eu);          // $FD >> 1, вдвинут 0
+    EXPECT_EQ(cpu.A & 0xFF00, 0x0300u);        // B не тронут
+    EXPECT_TRUE(cpu.P & CPU65816::FLAG_C);     // выдвинут бит 0 = 1
+}
+
+// ─── ROR A вдвигает установленный перенос в бит 7 ────────────────────────────
+TEST_F(SnesCpuTest, ROR_Accumulator8Bit_CarryIn) {
+    bus.writeCode(0x8000, { 0x18, 0xFB, 0xE2, 0x20, 0x38, 0x6A });
+    step(4);
+    cpu.A = 0x0002;
+    step();              // SEC
+    step();              // ROR A
+    EXPECT_EQ(cpu.A & 0x00FF, 0x81u);          // ($02 >> 1) | $80
+    EXPECT_FALSE(cpu.P & CPU65816::FLAG_C);    // бит 0 был 0
+}
