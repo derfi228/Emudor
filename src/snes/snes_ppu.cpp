@@ -961,9 +961,13 @@ void SnesPPU::renderScanline(int y)
                     op = subIsBackdrop ? coldata_ : subPx.cgColor;
                 else
                     op = coldata_;
-                bool subtract = (cgadsub & 0x40) != 0;
+                // $2131 CGADSUB: бит7 = сложение(0)/вычитание(1), бит6 = делить
+                // результат пополам. Биты были перепутаны местами: игра просила
+                // вычитание без деления (затухание в чёрное), а получалось
+                // сложение с делением — экран белел (Street Fighter II).
+                bool subtract = (cgadsub & 0x80) != 0;
                 // Halve не применяется когда операнд — backdrop sub-screen'а
-                bool halve    = (cgadsub & 0x80) != 0 && useSub && !subIsBackdrop;
+                bool halve    = (cgadsub & 0x40) != 0 && useSub && !subIsBackdrop;
 
                 int r1 = (mainColor       & 0x1F);
                 int g1 = ((mainColor >> 5) & 0x1F);
