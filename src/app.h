@@ -92,6 +92,7 @@ private:
     UiFonts  fonts_;                 // Anton/Oswald/Instrument Serif/Inter
     char     searchBuf_[128] = "";   // текст в поле поиска библиотеки
     float    refreshSpinT_   = 0.0f; // 0..1 — прогресс анимации спина кнопки ↻
+    float    libScroll_      = 0.0f; // прокрутка сетки библиотеки (пиксели)
     Lang     lang_           = Lang::EN;
 
     // Save/Load

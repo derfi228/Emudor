@@ -605,22 +605,61 @@ void App::renderMainMenu() {
 
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f);
 
-    // [+] Добавить ROM — акцентная заливка
-    ImGui::SetCursorPos({padX, topY});
-    ImGui::PushStyleColor(ImGuiCol_Button,        ToVec4(theme_.accent));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ToVec4(theme_.accentDeep));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ToVec4(theme_.accentDeep));
-    ImGui::PushStyleColor(ImGuiCol_Text,          ImVec4(1.0f, 0.973f, 0.929f, 1.0f));
-    if (fonts_.uiSemiBold) ImGui::PushFont(fonts_.uiSemiBold);
-    if (ImGui::Button("+", {btnSize, btnSize})) {
-        const char* filters[] = {"*.nes", "*.sfc", "*.smc", "*.fig", "*.swc"};
-        const char* p = tinyfd_openFileDialog(
-            "Add ROM to Library", "", 5, filters, "ROM files (NES/SNES)", 0);
-        if (p) addRomEntry(p);
+    // ── [+] Добавить ROM ─────────────────────────────────────────────────────
+    // Главное действие в шапке, поэтому рисуем вручную: акцентное свечение,
+    // внутренний блик сверху и векторный плюс (текстовый глиф "+" в кнопке
+    // ImGui сидел не по центру и выглядел тонким).
+    {
+        ImVec2 bp0 = {padX, topY};
+        ImGui::SetCursorScreenPos(bp0);
+        bool addClicked = ImGui::InvisibleButton("##addrom", {btnSize, btnSize});
+        bool hov = ImGui::IsItemHovered();
+        bool act = ImGui::IsItemActive();
+
+        float lift = (hov && !act) ? -1.0f : 0.0f;   // приподнимается под курсором
+        ImVec2 q0 = {bp0.x, bp0.y + lift};
+        ImVec2 q1 = {q0.x + btnSize, q0.y + btnSize};
+        const float rad = 13.0f;
+
+        // Внешнее свечение акцентом (мягкая тень цвета кнопки)
+        int layers = hov ? 6 : 3;
+        for (int gi = layers; gi >= 1; --gi) {
+            float g  = (float)gi * 1.9f;
+            int   al = (hov ? 34 : 20) - gi * 3;
+            if (al <= 0) continue;
+            dl->AddRect({q0.x - g, q0.y - g + 2.0f}, {q1.x + g, q1.y + g + 2.0f},
+                        (theme_.accent & 0x00FFFFFFu) | ((ImU32)al << 24),
+                        rad + g, 0, 1.7f);
+        }
+
+        // Заливка: при нажатии темнее, при наведении чуть насыщеннее
+        ImU32 fill = act ? theme_.accentDeep : theme_.accent;
+        dl->AddRectFilled(q0, q1, fill, rad);
+        // Блик по верхней половине + светлая кромка — объём без градиента
+        dl->AddRectFilled(q0, {q1.x, q0.y + btnSize * 0.46f},
+                          IM_COL32(255, 255, 255, act ? 18 : 38),
+                          rad, ImDrawFlags_RoundCornersTop);
+        dl->AddLine({q0.x + rad * 0.7f, q0.y + 1.5f}, {q1.x - rad * 0.7f, q0.y + 1.5f},
+                    IM_COL32(255, 255, 255, 90), 1.2f);
+        dl->AddRect(q0, q1, theme_.accentDeep, rad, 0, 1.0f);
+
+        // Векторный плюс
+        {
+            ImVec2 c = {(q0.x + q1.x) * 0.5f, (q0.y + q1.y) * 0.5f};
+            float  a = btnSize * 0.26f;   // половина длины штриха
+            ImU32  ink = IM_COL32(255, 248, 237, 255);
+            dl->AddLine({c.x - a, c.y}, {c.x + a, c.y}, ink, 2.8f);
+            dl->AddLine({c.x, c.y - a}, {c.x, c.y + a}, ink, 2.8f);
+        }
+
+        if (addClicked) {
+            const char* filters[] = {"*.nes", "*.sfc", "*.smc", "*.fig", "*.swc"};
+            const char* romPath = tinyfd_openFileDialog(
+                "Add ROM to Library", "", 5, filters, "ROM files (NES/SNES)", 0);
+            if (romPath) addRomEntry(romPath);
+        }
+        if (hov) ImGui::SetTooltip("%s", tr.addRom);
     }
-    if (fonts_.uiSemiBold) ImGui::PopFont();
-    ImGui::PopStyleColor(4);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr.addRom);
 
     // [↻] Пересканировать папки — обычная (surface) кнопка
     ImGui::SetCursorPos({padX + btnSize + btnGap, topY});
@@ -732,12 +771,15 @@ void App::renderMainMenu() {
 
     // ── Скроллируемая область сетки (порт main{overflow-y:auto}) ──────────────
     // Шапка/тулбар выше остаются неподвижны — скроллится только сама библиотека.
-    ImGui::SetCursorPos({0.0f, lineY + 1.0f});
-    // Прозрачный фон у сетки — чтобы был виден градиент окна под ней
-    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0, 0, 0, 0));
-    ImGui::BeginChild("##libraryGrid", {(float)winW, (float)winH - lineY - 1.0f}, false);
-    ImDrawList* gdl = ImGui::GetWindowDrawList();
-    ImVec2 gridOrigin = ImGui::GetCursorScreenPos();
+    // Сетка рисуется прямо в главном окне со своим клипом и прокруткой.
+    // Раньше здесь был BeginChild, но в развёрнутом окне его draw list
+    // переставал рендериться целиком (ImGui считал окно видимым, вершины
+    // набирались, а на экран не попадало ничего — включая тестовый маркер),
+    // и библиотека выглядела пустой. Ручной клип надёжнее и проще.
+    const float gridTop = lineY + 1.0f;
+    ImDrawList* gdl = dl;
+    gdl->PushClipRect({0.0f, gridTop}, {(float)winW, (float)winH}, true);
+    ImVec2 gridOrigin = {0.0f, gridTop - libScroll_};
 
     // ── Сетка карточек ──────────────────────────────────────────────────────
     const float gapX    = 24.0f;
@@ -761,6 +803,14 @@ void App::renderMainMenu() {
 
         ImVec2 p0 = {x, y};
         ImVec2 p1 = {p0.x + cardW, p0.y + cardH};
+        // Пропускаем ряды вне видимой области: иначе их InvisibleButton
+        // остаётся кликабельным под шапкой (клип на draw list кнопки не влияет)
+        if (p1.y < gridTop || p0.y > (float)winH) {
+            ImGui::PopID();
+            x += cardW + gapX;
+            if (++col >= cols) { col = 0; x = gridOrigin.x + padX; y += cardH + gapY; }
+            continue;
+        }
         bool hovered = ImGui::IsMouseHoveringRect(p0, p1);
         // Лёгкий "подъём" при наведении (упрощение CSS translateY(-4px)).
         if (hovered) { p0.y -= 4.0f; p1.y -= 4.0f; }
@@ -798,6 +848,12 @@ void App::renderMainMenu() {
             float fitW   = texW * scale, fitH = texH * scale;
             float u0 = (fitW - (coverP1.x-coverP0.x)) / (2.0f * fitW);
             float v0 = (fitH - (coverP1.y-coverP0.y)) / (2.0f * fitH);
+            // Зажимаем UV в [0, 0.5]: погрешность float даёт значения вроде
+            // -1e-8, а SDL_RenderGeometryRaw при UV вне [0,1] отвергает ВЕСЬ
+            // батч геометрии кадра — пропадал не только этот кадр обложки,
+            // а весь интерфейс целиком ("Values of 'uv' out of bounds").
+            u0 = u0 < 0.0f ? 0.0f : (u0 > 0.5f ? 0.5f : u0);
+            v0 = v0 < 0.0f ? 0.0f : (v0 > 0.5f ? 0.5f : v0);
             // Скругляем ТОЛЬКО верхние углы — низ упирается в полосу геймпада
             gdl->AddImageRounded((ImTextureID)(intptr_t)entry.cover,
                 coverP0, coverP1, {u0, v0}, {1.0f-u0, 1.0f-v0},
@@ -874,8 +930,21 @@ void App::renderMainMenu() {
         ImGui::PopStyleColor();
     }
 
-    ImGui::EndChild();
-    ImGui::PopStyleColor(); // ChildBg
+    gdl->PopClipRect();
+
+    // ── Прокрутка сетки колесом ──────────────────────────────────────────────
+    // y после цикла указывает на низ последнего ряда (в координатах с учётом
+    // текущего скролла), поэтому полную высоту берём относительно gridOrigin.
+    {
+        float contentH = (y + cardH) - gridOrigin.y;
+        float viewH    = (float)winH - gridTop;
+        float maxScroll = contentH > viewH ? (contentH - viewH) : 0.0f;
+        ImGuiIO& io = ImGui::GetIO();
+        if (!showSettings_ && io.MousePos.y >= gridTop && io.MouseWheel != 0.0f)
+            libScroll_ -= io.MouseWheel * 80.0f;
+        if (libScroll_ > maxScroll) libScroll_ = maxScroll;
+        if (libScroll_ < 0.0f)      libScroll_ = 0.0f;
+    }
 
     ImGui::End();
     ImGui::PopStyleColor(); // WindowBg
