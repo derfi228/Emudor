@@ -94,6 +94,8 @@ private:
     bool     hasDSP1_ = false;
     SnesDSP1 dsp1_;
 
+    int dsp1Select(uint8_t bank, uint16_t off) const;
+
     SnesPPU* ppu_ = nullptr;
     SnesAPU* apu_ = nullptr;
 

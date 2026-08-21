@@ -185,10 +185,11 @@ uint8_t SnesBus::read(uint32_t addr)
         return wram_[off];
     }
 
-    // ── DSP-1: DR=$6000-$6FFF, SR=$7000-$7FFF (банки $00-$3F/$80-$BF) ─────────
-    if (hasDSP1_ && (bank <= 0x3F || (bank >= 0x80 && bank <= 0xBF))
-        && off >= 0x6000 && off < 0x8000) {
-        return (off < 0x7000) ? dsp1_.readDR() : dsp1_.readSR();
+    // ── DSP-1: адреса зависят от типа картриджа (см. dsp1Select) ─────────────
+    if (hasDSP1_) {
+        int sel = dsp1Select(bank, off);
+        if (sel == 1) return dsp1_.readDR();
+        if (sel == 2) return dsp1_.readSR();
     }
 
     // ── ROM / SRAM — зависит от типа маппинга ────────────────────────────────
@@ -200,6 +201,21 @@ uint8_t SnesBus::read(uint32_t addr)
     }
 
     return openBus_;
+}
+
+// ─── Куда попал адрес: 0 = не DSP-1, 1 = регистр данных, 2 = регистр статуса ──
+// LoROM: банки $30-$3F/$B0-$BF, $8000-$BFFF = DR, $C000-$FFFF = SR.
+// HiROM: банки $00-$0F/$80-$8F, $6000-$6FFF = DR, $7000-$7FFF = SR.
+int SnesBus::dsp1Select(uint8_t bank, uint16_t off) const
+{
+    if (mapMode_ == MapMode::LoROM) {
+        bool inBank = (bank >= 0x30 && bank <= 0x3F) || (bank >= 0xB0 && bank <= 0xBF);
+        if (!inBank || off < 0x8000) return 0;
+        return (off < 0xC000) ? 1 : 2;
+    }
+    bool inBank = (bank <= 0x0F) || (bank >= 0x80 && bank <= 0x8F);
+    if (!inBank || off < 0x6000 || off >= 0x8000) return 0;
+    return (off < 0x7000) ? 1 : 2;
 }
 
 // ─── Главный диспетчер записи ─────────────────────────────────────────────────
@@ -230,11 +246,13 @@ void SnesBus::write(uint32_t addr, uint8_t data)
         return;
     }
 
-    // ── DSP-1: запись DR ($6000-$6FFF); SR ($7000+) только на чтение ──────────
-    if (hasDSP1_ && (bank <= 0x3F || (bank >= 0x80 && bank <= 0xBF))
-        && off >= 0x6000 && off < 0x8000) {
-        if (off < 0x7000) dsp1_.writeDR(data);
-        return;
+    // ── DSP-1: пишется только DR, статус доступен лишь на чтение ─────────────
+    if (hasDSP1_) {
+        int sel = dsp1Select(bank, off);
+        if (sel != 0) {
+            if (sel == 1) dsp1_.writeDR(data);
+            return;
+        }
     }
 
     // ── Зеркало WRAM $0000–$1FFF ──────────────────────────────────────────────
