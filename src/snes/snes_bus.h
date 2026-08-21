@@ -24,6 +24,8 @@ public:
 
     // Чтение/запись (виртуальные — мок может переопределить в тестах)
     virtual uint8_t read (uint32_t addr);
+    // Внутренняя выборка без обновления открытой шины — им пользуется read()
+    uint8_t readInternal(uint32_t addr);
     virtual void    write(uint32_t addr, uint8_t data);
 
     // Подключение PPU и APU для перенаправления регистров

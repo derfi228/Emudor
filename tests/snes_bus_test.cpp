@@ -278,3 +278,39 @@ TEST(SnesBusTest, WramPointer)
     const uint8_t* p = bus.wram();
     EXPECT_EQ(p[0x0042], 0xAAu);
 }
+
+// ─── Открытая шина держит последнее значение, прошедшее по ней ───────────────
+// Регрессия Street Fighter II: раньше openBus_ обновляла только запись, поэтому
+// «записал в пустой адрес → прочитал оттуда же» возвращало записанное, и игры
+// видели несуществующее ОЗУ в картридже. Чтение (в т.ч. выборка кода) тоже
+// должно обновлять шину.
+TEST(SnesBusTest, OpenBus_ReadUpdatesLastValue)
+{
+    SnesBus bus;
+    auto rom = makeHiROM();
+    rom[0x8000] = 0x5A;                       // байт ПЗУ для чтения между делом
+    bus.loadROMDirect(std::move(rom), SnesBus::MapMode::HiROM);
+
+    // $30:6000 — область SRAM у HiROM, но SRAM не подключена → открытая шина
+    bus.write(0x306000, 0xC3);
+    // Промежуточное чтение настоящего ПЗУ перекладывает шину на свой байт
+    EXPECT_EQ(bus.read(0x008000), 0x5Au);
+    // Значит теста «записалось ли» картридж не проходит — памяти там нет
+    EXPECT_NE(bus.read(0x306000), 0xC3u);
+    EXPECT_EQ(bus.read(0x306000), 0x5Au);
+}
+
+// ─── Тест на наличие ОЗУ в картридже должен проваливаться, если его нет ──────
+TEST(SnesBusTest, OpenBus_CartRamProbeFails)
+{
+    SnesBus bus;
+    auto rom = makeHiROM();
+    rom[0x8000] = 0x11;
+    bus.loadROMDirect(std::move(rom), SnesBus::MapMode::HiROM);
+
+    // Так игра щупает память: прочитать, изменить, записать, сверить
+    uint8_t before = bus.read(0x306000);
+    bus.write(0x306000, (uint8_t)(before + 1));
+    bus.read(0x008000);                       // выборка следующей инструкции
+    EXPECT_NE(bus.read(0x306000), (uint8_t)(before + 1));
+}
