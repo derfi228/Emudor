@@ -58,7 +58,7 @@ void SnesConsole::runFrame()
 
     bus_.setVBlankActive(false);
 
-    int cpuAcc = 0;
+    int cpuUnits = 0;   // «долг» CPU в половинках дота
 
     // ── Cycle-accurate co-scheduler ──────────────────────────────────────────
     // PPU тикаем по доту, CPU — раз в 2 дота (как раньше, его тайминг НЕ меняем),
@@ -84,10 +84,18 @@ void SnesConsole::runFrame()
             if (bus_.nmiEnabled()) cpu_.nmi();
         }
 
-        // ── CPU: 1 инструкция каждые 2 PPU дота ──────────────────────────────
-        if (++cpuAcc >= 2) {
-            cpuAcc = 0;
-            if (!cpu_.stopped_ && !cpu_.waiting_) cpu_.clock();
+        // ── CPU: исполняем по ТАКТАМ инструкций, а не «одна на 2 дота» ───────
+        // Такт 65816 = 6 мастер-тактов (быстрая шина) или 8 (медленная), дот PPU
+        // = 4. Считаем в половинках дота: дот = 2 единицы, такт CPU = 3 или 4.
+        // Прежняя модель гнала CPU вчетверо быстрее железа, и порядок событий
+        // внутри кадра переворачивался.
+        cpuUnits += 2;
+        while (cpuUnits > 0) {
+            if (cpu_.stopped_ || cpu_.waiting_) { cpuUnits = 0; break; }
+            cpu_.clock();
+            cpuUnits -= (int)bus_.cpuCycleUnits()
+                      * (cpu_.pendingCycles_ > 0 ? cpu_.pendingCycles_ : 2);
+            cpuUnits -= (int)bus_.takeDmaUnits();   // блочная DMA тоже ест время
         }
 
         // ── SPC700: интерлив по мастер-такту (конкурентно с CPU) ─────────────

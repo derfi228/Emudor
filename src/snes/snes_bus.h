@@ -75,6 +75,15 @@ public:
     }
     void raiseIrq()               { irqPending_ = true; }
     // Авто-опрос джойпада ($4218/$421A): вызывается в начале VBlank
+    // Время, съеденное блочной DMA, в единицах планировщика CPU (дот = 2,
+    // такт CPU = 3). Железо тратит 8 мастер-тактов на байт, это 4 единицы.
+    uint32_t dmaUnits_ = 0;
+    uint32_t takeDmaUnits() { uint32_t u = dmaUnits_; dmaUnits_ = 0; return u; }
+
+    // Длительность такта CPU: медленная шина — 8 мастер-тактов (4 единицы),
+    // быстрая — 6 (3 единицы). Быструю включает $420D бит 0.
+    uint32_t cpuCycleUnits() const { return memsel_ ? 3u : 4u; }
+
     void latchAutoJoy() {
         autoJoy_[0] = controller[0];
         autoJoy_[1] = controller[1];

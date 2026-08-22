@@ -683,6 +683,8 @@ void SnesBus::execGDMACh(int ch)
     uint32_t aAddr  = (uint32_t)((d.a1b << 16) | d.a1t);
     uint32_t count  = (d.das == 0) ? 0x10000u : (uint32_t)d.das;  // 0 → 65536
 
+    dmaUnits_ += count * 4;   // 8 мастер-тактов на байт
+
     int step = 0;
     while (count > 0) {
         int regOff = kDmaPattern[mode][step % plen];
