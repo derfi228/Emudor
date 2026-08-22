@@ -92,7 +92,7 @@ void SnesConsole::runFrame()
         cpuUnits += 2;
         while (cpuUnits > 0) {
             if (cpu_.stopped_ || cpu_.waiting_) { cpuUnits = 0; break; }
-            cpu_.clock();
+cpu_.clock();
             cpuUnits -= (int)bus_.cpuCycleUnits()
                       * (cpu_.pendingCycles_ > 0 ? cpu_.pendingCycles_ : 2);
             cpuUnits -= (int)bus_.takeDmaUnits();   // блочная DMA тоже ест время
@@ -112,7 +112,11 @@ void SnesConsole::runFrame()
             int scanline = dot / 341;
 
             // SuperFX/GSU работает параллельно CPU (~3:1 по тактам)
-            bus_.runSuperFX(256);
+            // Бюджет GSU на сканлайн. Чип на 21 МГц успевает за строку около
+            // 1300 тактов, а инструкция занимает 1-3 такта — так что 256 шагов
+            // это в разы меньше реального. Игра ждёт окончания программы GSU в
+            // цикле, поэтому заниженный бюджет выглядит как зависание.
+            bus_.runSuperFX(1300);
 
             // HDMA шагает ТОЛЬКО по видимым строкам (1–224). В VBlank его гонять
             // нельзя: resetHDMA() на NMI (строка 225) уже выставил hdmaInit_, и

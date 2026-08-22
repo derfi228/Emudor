@@ -87,10 +87,20 @@ void SuperFX::setZS16(uint16_t v)
     if (v & 0x8000)   sfr_ |= SFR_S;
 }
 
+// Запись регистра. R14 — адресный регистр ПЗУ: запись в него ЗАПУСКАЕТ чтение
+// байта по ROMBR:R14 в буфер, откуда его потом забирают GETB/GETBH/GETBL/GETBS.
+// Без этого буфер всегда пустой, и циклы чтения данных из ПЗУ не завершаются
+// (Star Fox зависал именно так, а CPU ждал сброса бита GO).
+void SuperFX::setReg(int n, uint16_t v)
+{
+    n &= 15;
+    r_[n] = v;
+    if (n == 14) romBufByte_ = romReadByte((uint32_t)((rombr_ << 16) | v));
+}
+
 void SuperFX::writeDst(uint16_t v)
 {
-    r_[dreg_ & 15] = v;
-    if ((dreg_ & 15) == 15) { /* запись в PC = переход */ }
+    setReg(dreg_ & 15, v);
 }
 
 void SuperFX::resetPrefix()
@@ -223,7 +233,7 @@ void SuperFX::step()
     // $10-$1F: TO Rn (или MOVE если B-префикс)
     if (op >= 0x10 && op <= 0x1F) {
         uint8_t n = op & 15;
-        if (b_) { r_[n] = src(); resetPrefix(); }   // MOVE
+        if (b_) { setReg(n, src()); resetPrefix(); }   // MOVE
         else    { dreg_ = n; /* префиксы НЕ сбрасываем для TO */ }
         return;
     }
@@ -390,11 +400,11 @@ void SuperFX::step()
         uint8_t n = op & 15;
         if (alt_ == 0) {        // IBT Rn,#imm
             int8_t imm = (int8_t)fetchOpcode();
-            r_[n] = (uint16_t)(int16_t)imm;
+            setReg(n, (uint16_t)(int16_t)imm);
         } else if (alt_ & 1) {  // LMS Rn,(yy) — короткая загрузка из RAM
             uint8_t a = fetchOpcode();
             uint32_t addr = (uint32_t)((rambr_ << 16) | (a << 1));
-            r_[n] = (uint16_t)(ramReadByte(addr) | (ramReadByte(addr + 1) << 8));
+            setReg(n, (uint16_t)(ramReadByte(addr) | (ramReadByte(addr + 1) << 8)));
         } else {                // SMS (yy),Rn — короткое сохранение в RAM
             uint8_t a = fetchOpcode();
             uint32_t addr = (uint32_t)((rambr_ << 16) | (a << 1));
@@ -427,7 +437,7 @@ void SuperFX::step()
     // $D0-$DE: INC Rn
     if (op >= 0xD0 && op <= 0xDE) {
         uint8_t n = op & 15;
-        r_[n] = (uint16_t)(r_[n] + 1);
+        setReg(n, (uint16_t)(r_[n] + 1));
         setZS16(r_[n]); resetPrefix(); return;
     }
     if (op == 0xDF) { // GETC / RAMB / ROMB
@@ -439,7 +449,7 @@ void SuperFX::step()
     // $E0-$EE: DEC Rn
     if (op >= 0xE0 && op <= 0xEE) {
         uint8_t n = op & 15;
-        r_[n] = (uint16_t)(r_[n] - 1);
+        setReg(n, (uint16_t)(r_[n] - 1));
         setZS16(r_[n]); resetPrefix(); return;
     }
     if (op == 0xEF) { // GETB / GETBH / GETBL / GETBS
@@ -455,11 +465,11 @@ void SuperFX::step()
         uint8_t n = op & 15;
         if (alt_ == 0) {        // IWT Rn,#imm16
             uint8_t lo = fetchOpcode(), hi = fetchOpcode();
-            r_[n] = (uint16_t)(lo | (hi << 8));
+            setReg(n, (uint16_t)(lo | (hi << 8)));
         } else if (alt_ & 1) {  // LM Rn,(xx) — загрузка из RAM по адресу-слову
             uint8_t lo = fetchOpcode(), hi = fetchOpcode();
             uint32_t addr = (uint32_t)((rambr_ << 16) | (lo | (hi << 8)));
-            r_[n] = (uint16_t)(ramReadByte(addr) | (ramReadByte(addr + 1) << 8));
+            setReg(n, (uint16_t)(ramReadByte(addr) | (ramReadByte(addr + 1) << 8)));
         } else {                // SM (xx),Rn — сохранение в RAM
             uint8_t lo = fetchOpcode(), hi = fetchOpcode();
             uint32_t addr = (uint32_t)((rambr_ << 16) | (lo | (hi << 8)));

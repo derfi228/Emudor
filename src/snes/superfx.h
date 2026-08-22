@@ -110,6 +110,7 @@ private:
     uint16_t& src();                  // регистр-источник
     uint16_t& dst();                  // регистр-приёмник
     void      writeDst(uint16_t v);   // запись в dst + сброс префиксов
+    void      setReg(int n, uint16_t v);  // запись регистра (R14 запускает чтение ПЗУ)
     void      setZS16(uint16_t v);
     void      resetPrefix();          // после исполнения опкода
 
