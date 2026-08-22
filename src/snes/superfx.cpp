@@ -95,7 +95,13 @@ void SuperFX::setReg(int n, uint16_t v)
 {
     n &= 15;
     r_[n] = v;
-    if (n == 14) romBufByte_ = romReadByte((uint32_t)((rombr_ << 16) | v));
+    if (n == 14) {
+        // ПЗУ у GSU видно в банках $00-$3F через окно $8000-$FFFF (LoROM):
+        // смещение = банк * 0x8000 + (адрес - 0x8000). Та же формула, что при
+        // выборке кода. Плоский 24-битный адрес попадал в текст диалогов.
+        uint32_t lin = (uint32_t)((rombr_ & 0x3F) * 0x8000u + (v & 0x7FFF));
+        romBufByte_ = romReadByte(lin);
+    }
 }
 
 void SuperFX::writeDst(uint16_t v)
