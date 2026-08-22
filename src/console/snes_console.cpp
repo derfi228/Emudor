@@ -92,7 +92,7 @@ void SnesConsole::runFrame()
         cpuUnits += 2;
         while (cpuUnits > 0) {
             if (cpu_.stopped_ || cpu_.waiting_) { cpuUnits = 0; break; }
-cpu_.clock();
+            cpu_.clock();
             cpuUnits -= (int)bus_.cpuCycleUnits()
                       * (cpu_.pendingCycles_ > 0 ? cpu_.pendingCycles_ : 2);
             cpuUnits -= (int)bus_.takeDmaUnits();   // блочная DMA тоже ест время
@@ -103,6 +103,20 @@ cpu_.clock();
             int c = apu_.stepOne();                              // одна инструкция SPC
             spcNextTick_ += (uint64_t)c * MASTER_PER_SPC_CYCLE;  // её длительность
             apu_.tickDsp(c);                                     // DSP-сэмплы (~32 кГц)
+        }
+
+        // ── IRQ режима 11 (H+V): срабатывает в ЗАДАННОЙ позиции строки ───────
+        // Раньше мы возбуждали его в начале строки, игнорируя горизонтальную
+        // цель. Из-за этого прерывание опережало обработчик NMI через раз, и
+        // HDMA матрицы Mode 7 у Mario Kart включалась через кадр — картинка
+        // мерцала.
+        if (bus_.irqMode() == 3) {
+            int line = dot / 341, hpos = dot % 341;
+            if (line == (int)bus_.vTarget() && hpos == (int)(bus_.hTarget() % 341)) {
+                bus_.raiseIrq();
+                cpu_.waiting_ = false;
+                cpu_.irq();
+            }
         }
 
         // ── HDMA / IRQ: раз в сканлайн ─────────────────────────────────────────
@@ -125,16 +139,13 @@ cpu_.clock();
             // (арена Street Fighter II, дождь Zelda, фон EarthBound).
             if (scanline < 225) bus_.runHDMA();
 
-            // ── IRQ по V-таймеру (только режимы 10/11 $4200) ──────────────────
-            // H-IRQ намеренно не реализован — он срабатывает на каждой строке
-            // и легко флудит CPU. Большинство игр используют V-IRQ.
-            uint8_t mode = bus_.irqMode();
-            if (mode == 2 || mode == 3) {
-                if (scanline == (int)bus_.vTarget()) {
-                    bus_.raiseIrq();
-                    cpu_.waiting_ = false;
-                    cpu_.irq();
-                }
+            // ── IRQ по V-таймеру, режим 10 ($4200): только строка ─────────────
+            // Режим 11 (H+V) обрабатывается ниже, по доту: там важна и
+            // горизонтальная позиция.
+            if (bus_.irqMode() == 2 && scanline == (int)bus_.vTarget()) {
+                bus_.raiseIrq();
+                cpu_.waiting_ = false;
+                cpu_.irq();
             }
         }
     }
