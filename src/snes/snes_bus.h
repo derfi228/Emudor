@@ -68,12 +68,11 @@ public:
     uint8_t irqMode() const       { return (uint8_t)((nmitimen_ >> 4) & 3); } // bits 5:4 (H/V enable)
     uint16_t hTarget() const      { return hTarget_; }
     uint16_t vTarget() const      { return vTarget_; }
-    bool consumeIrq() {
-        bool p = irqPending_;
-        // флаг IRQ автоматически висит до чтения $4211
-        return p;
-    }
+    // Флаг IRQ таймера ($4211 бит 7) висит, пока его не прочтут.
     void raiseIrq()               { irqPending_ = true; }
+    // Линия IRQ процессора: таймер ИЛИ чип картриджа (SuperFX по STOP).
+    // Уровневая: CPU уходит в прерывание, как только снимет флаг I.
+    bool irqLine() const          { return irqPending_ || cartIrq(); }
     // Авто-опрос джойпада ($4218/$421A): вызывается в начале VBlank
     // Время, съеденное блочной DMA, в единицах планировщика CPU (дот = 2,
     // такт CPU = 3). Железо тратит 8 мастер-тактов на байт, это 4 единицы.

@@ -91,9 +91,10 @@ void SnesConsole::runFrame()
         // внутри кадра переворачивался.
         cpuUnits += 2;
         while (cpuUnits > 0) {
-            // IRQ от чипа картриджа (SuperFX) — уровень: висит, пока CPU его
-            // не снимет, и будит WAI даже при запрещённых прерываниях.
-            if (bus_.cartIrq()) {
+            // IRQ — уровень (таймер $4211 или чип картриджа): висит, пока игра
+            // его не снимет, и срабатывает, как только CPU разрешит прерывания.
+            // WAI будит даже при запрещённых.
+            if (bus_.irqLine()) {
                 cpu_.waiting_ = false;
                 if (!(cpu_.P & CPU65816::FLAG_I)) cpu_.irq();
             }
@@ -114,41 +115,29 @@ void SnesConsole::runFrame()
             apu_.tickDsp(c);                                     // DSP-сэмплы (~32 кГц)
         }
 
-        // ── IRQ режима 11 (H+V): срабатывает в ЗАДАННОЙ позиции строки ───────
-        // Раньше мы возбуждали его в начале строки, игнорируя горизонтальную
-        // цель. Из-за этого прерывание опережало обработчик NMI через раз, и
-        // HDMA матрицы Mode 7 у Mario Kart включалась через кадр — картинка
-        // мерцала.
-        if (bus_.irqMode() == 3) {
-            int line = dot / 341, hpos = dot % 341;
-            if (line == (int)bus_.vTarget() && hpos == (int)(bus_.hTarget() % 341)) {
-                bus_.raiseIrq();
-                cpu_.waiting_ = false;
-                cpu_.irq();
-            }
+        // ── IRQ таймера ($4200 биты 5:4) — по позиции луча ───────────────────
+        // 01: на каждой строке в точке HTIME; 10: в начале строки VTIME;
+        // 11: в точке (HTIME, VTIME). Цель за пределами строки (HTIME > 339)
+        // на железе не срабатывает никогда. Флаг поднимается здесь, а в
+        // прерывание CPU уходит по линии IRQ (см. цикл CPU выше).
+        if (uint8_t mode = bus_.irqMode()) {
+            const int line = dot / 341, hpos = dot % 341;
+            const int ht = (int)bus_.hTarget(), vt = (int)bus_.vTarget();
+            bool hit;
+            if      (mode == 1) hit = ht <= 339 && hpos == ht;
+            else if (mode == 2) hit = hpos == 0 && line == vt;
+            else                hit = ht <= 339 && hpos == ht && line == vt;
+            if (hit) bus_.raiseIrq();
         }
 
-        // ── HDMA / IRQ: раз в сканлайн ─────────────────────────────────────────
-        // Строку 0 тоже проверяем: игра может ставить цель IRQ на неё
-        // (Mario Kart в заезде просит H+V IRQ при vTarget = 0).
+        // ── HDMA: раз в сканлайн, только по видимым строкам ──────────────────
+        // В VBlank HDMA гонять нельзя: resetHDMA() на NMI уже выставил
+        // hdmaInit_, и прогон пере-инициализировал бы канал и «съел» начало
+        // таблицы → эффект съезжал по вертикали (арена Street Fighter II,
+        // дождь Zelda, фон EarthBound). Видимых строк 224, в overscan — 239.
         if (dot % 341 == 0) {
             int scanline = dot / 341;
-
-            // HDMA шагает ТОЛЬКО по видимым строкам (1–224). В VBlank его гонять
-            // нельзя: resetHDMA() на NMI (строка 225) уже выставил hdmaInit_, и
-            // прогон в VBlank пере-инициализировал бы канал и «съел» начало
-            // таблицы → эффект съезжал по вертикали, низ экрана ломался
-            // (арена Street Fighter II, дождь Zelda, фон EarthBound).
             if (scanline < ppu_.vblankStart()) bus_.runHDMA();
-
-            // ── IRQ по V-таймеру, режим 10 ($4200): только строка ─────────────
-            // Режим 11 (H+V) обрабатывается ниже, по доту: там важна и
-            // горизонтальная позиция.
-            if (bus_.irqMode() == 2 && scanline == (int)bus_.vTarget()) {
-                bus_.raiseIrq();
-                cpu_.waiting_ = false;
-                cpu_.irq();
-            }
         }
     }
 

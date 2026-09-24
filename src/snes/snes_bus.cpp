@@ -652,7 +652,12 @@ void SnesBus::writeIO(uint16_t addr, uint8_t data)
 
     // ── CPU I/O регистры ─────────────────────────────────────────────────────
     // $4200 NMITIMEN: NMI/IRQ/joypad enable
-    if (addr == 0x4200) { nmitimen_ = data; return; }
+    if (addr == 0x4200) {
+        nmitimen_ = data;
+        // Выключили и H-, и V-прерывание — железо снимает висящий флаг IRQ.
+        if (!(data & 0x30)) irqPending_ = false;
+        return;
+    }
     // $4201 I/O port direction — игнорируем
     if (addr == 0x4201) return;
     // $4202 WRMPYA: множитель A
