@@ -372,3 +372,20 @@ TEST(SnesBusTest, Overscan_VBlankStartsAtLine240)
     ppu.setState(st);
     EXPECT_EQ(bus.read(0x004212) & 0x80, 0x00);        // строка 230 ещё видимая
 }
+
+// ─── IRQ таймера — уровень: висит до чтения $4211 или выключения в $4200 ─────
+TEST(SnesBusTest, TimerIrq_LevelUntilAcknowledged)
+{
+    SnesBus bus;
+    bus.loadROMDirect(makeLoROM(), SnesBus::MapMode::LoROM);
+    bus.write(0x004200, 0x30);                         // H+V IRQ включены
+    bus.raiseIrq();
+    EXPECT_TRUE(bus.irqLine());
+    EXPECT_TRUE(bus.irqLine());                        // сам по себе не гаснет
+    EXPECT_EQ(bus.read(0x004211) & 0x80, 0x80);        // чтение подтверждает
+    EXPECT_FALSE(bus.irqLine());
+
+    bus.raiseIrq();
+    bus.write(0x004200, 0x80);                         // H и V выключены
+    EXPECT_FALSE(bus.irqLine());
+}
