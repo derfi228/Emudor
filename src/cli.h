@@ -10,6 +10,7 @@ struct CliArgs {
     int         frames           = -1;     // --frames (−1 = бесконечно)
     std::string screenshotPath;   // --screenshot
     int         screenshotEvery  = 0;      // --screenshot-every N (0 = выкл)
+    int         screenshotFrom   = 0;      // --screenshot-from N: снимки не раньше кадра N
     bool        headless         = false;  // --headless
     std::string traceLogPath;     // --record-trace
     std::string inputScriptPath;  // --input-script (debug: воспроизведение нажатий)

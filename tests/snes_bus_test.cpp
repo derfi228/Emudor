@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "snes/snes_bus.h"
+#include "snes/snes_ppu.h"
 #include <vector>
 #include <cstdint>
 
@@ -313,4 +314,61 @@ TEST(SnesBusTest, OpenBus_CartRamProbeFails)
     bus.write(0x306000, (uint8_t)(before + 1));
     bus.read(0x008000);                       // выборка следующей инструкции
     EXPECT_NE(bus.read(0x306000), (uint8_t)(before + 1));
+}
+
+// ─── $4212 бит 0: авто-опрос джойпада идёт ~3 строки с начала VBlank ─────────
+// Star Fox перед уровнем ждёт сначала появления этого бита, потом снятия.
+TEST(SnesBusTest, HVBJOY_AutoJoypadBusyAtVBlankStart)
+{
+    SnesBus bus;
+    SnesPPU ppu;
+    bus.loadROMDirect(makeLoROM(), SnesBus::MapMode::LoROM);
+    bus.connectPPU(&ppu);
+    ppu.reset();
+    bus.write(0x004200, 0x01);                         // авто-опрос включён
+
+    SnesPPU::State st = ppu.getState();
+    st.scanline = 226; st.dot = 100;
+    ppu.setState(st);
+    EXPECT_EQ(bus.read(0x004212) & 0x81, 0x81);        // VBlank + опрос идёт
+
+    st.scanline = 230; st.dot = 100;
+    ppu.setState(st);
+    EXPECT_EQ(bus.read(0x004212) & 0x81, 0x80);        // опрос закончился
+
+    bus.write(0x004200, 0x00);                         // авто-опрос выключен
+    st.scanline = 226; st.dot = 100;
+    ppu.setState(st);
+    EXPECT_EQ(bus.read(0x004212) & 0x01, 0x00);
+}
+
+// ─── Режим overscan ($2133 бит 2): 239 строк, VBlank и NMI на строке 240 ──────
+// Mario Kart гасит экран и HDMA прерыванием на строке 234 — до NMI. Если
+// VBlank начинать на 225-й, порядок переворачивается и картинка мерцает.
+TEST(SnesBusTest, Overscan_VBlankStartsAtLine240)
+{
+    SnesBus bus;
+    SnesPPU ppu;
+    bus.loadROMDirect(makeLoROM(), SnesBus::MapMode::LoROM);
+    bus.connectPPU(&ppu);
+    ppu.reset();
+    bus.write(0x002133, 0x04);
+
+    // Режим защёлкивается в начале кадра: докручиваем до следующего.
+    for (int i = 0; i < 341 * 262; ++i) ppu.clock();
+    EXPECT_EQ(ppu.vblankStart(), 240);
+
+    ppu.nmiPending = false;                            // флаг снимает консоль
+    int nmiLine = -1;
+    for (int i = 0; i < 341 * 262 && nmiLine < 0; ++i) {
+        ppu.clock();
+        if (ppu.nmiPending) nmiLine = ppu.curScanline();
+    }
+    EXPECT_EQ(nmiLine, 240);
+    EXPECT_EQ(ppu.outputHeight(), 239);
+
+    SnesPPU::State st = ppu.getState();
+    st.scanline = 230; st.dot = 100;
+    ppu.setState(st);
+    EXPECT_EQ(bus.read(0x004212) & 0x80, 0x00);        // строка 230 ещё видимая
 }

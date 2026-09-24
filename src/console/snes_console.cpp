@@ -139,7 +139,7 @@ void SnesConsole::runFrame()
             // прогон в VBlank пере-инициализировал бы канал и «съел» начало
             // таблицы → эффект съезжал по вертикали, низ экрана ломался
             // (арена Street Fighter II, дождь Zelda, фон EarthBound).
-            if (scanline < 225) bus_.runHDMA();
+            if (scanline < ppu_.vblankStart()) bus_.runHDMA();
 
             // ── IRQ по V-таймеру, режим 10 ($4200): только строка ─────────────
             // Режим 11 (H+V) обрабатывается ниже, по доту: там важна и

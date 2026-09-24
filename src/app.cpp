@@ -482,6 +482,15 @@ void App::update() {
         }
     }
 
+    // Высота кадра может смениться на ходу (SNES: режим overscan, 239 строк)
+    int texW = 0, texH = 0;
+    SDL_QueryTexture(gameTexture_, nullptr, nullptr, &texW, &texH);
+    if (texW != console_->getFrameWidth() || texH != console_->getFrameHeight()) {
+        SDL_DestroyTexture(gameTexture_);
+        gameTexture_ = SDL_CreateTexture(
+            renderer_, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING,
+            console_->getFrameWidth(), console_->getFrameHeight());
+    }
     SDL_UpdateTexture(gameTexture_, nullptr,
                       console_->getFramebuffer(),
                       console_->getFrameWidth() * (int)sizeof(uint32_t));

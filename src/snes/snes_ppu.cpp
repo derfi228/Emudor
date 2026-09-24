@@ -10,6 +10,8 @@ void SnesPPU::reset()
 {
     scanline_     = 0;
     dot_          = 0;
+    overscan_     = false;
+    lastOverscan_ = false;
     frameComplete = false;
     nmiPending    = false;
     vramAddr_     = 0;
@@ -38,16 +40,20 @@ void SnesPPU::clock()
     if (dot_ >= 341) {
         dot_ = 0;
 
-        // Рендерим строку (сканлайн 1 → строка 0 на экране, 224 активных строки)
-        if (scanline_ >= 1 && scanline_ <= (uint16_t)HEIGHT) {
+        // Рендерим строку (сканлайн 1 → строка 0 на экране; 224 активных
+        // строки, в режиме overscan — 239)
+        if (scanline_ >= 1 && scanline_ < vblankStart()) {
             renderScanline((int)scanline_ - 1);
         }
         ++scanline_;
 
-        if (scanline_ == 225) {
-            // VBlank начинается
+        if (scanline_ == vblankStart()) {
+            // VBlank начинается. В режиме overscan — на 15 строк позже: игры
+            // успевают сделать что-то в строках 225-239 до NMI (Mario Kart
+            // гасит там экран и HDMA прерыванием на строке 234).
             nmiPending    = true;
             frameComplete = true;
+            lastOverscan_ = overscan_;
             regs_[0x3F] |= 0x80;  // STAT78: VBlank флаг
 
             // ── Диагностика PPU (EMUDOR_PPU_DBG); getenv кэширован ───────────
@@ -72,6 +78,7 @@ void SnesPPU::clock()
         if (scanline_ >= 262) {
             scanline_ = 0;
             frameComplete = false;
+            overscan_ = (regs_[0x33] & 0x04) != 0;   // SETINI: 239 строк
             regs_[0x3F] &= (uint8_t)~0x80;
         }
     }
@@ -565,72 +572,51 @@ SnesPPU::BgPixel SnesPPU::getBGPixel(int bgIdx, int screenX, int screenY) const
 }
 
 // ─── Mode 7 ───────────────────────────────────────────────────────────────────
-// Каноническая формула SNES PPU:
-//   ox = (A*(X+HOFS-Cx) + B*(Y+VOFS-Cy)) >> 8 + Cx
-//   oy = (C*(X+HOFS-Cx) + D*(Y+VOFS-Cy)) >> 8 + Cy
-// где Cx=M7X, Cy=M7Y, A/B/C/D=матрица. Все смещения — 13-битные знаковые.
+// Как у железа: сначала отражение ЭКРАННЫХ координат (M7SEL биты 0/1), затем
+//   ox = A*x + B*y + A*clip(HOFS-M7X) + B*clip(VOFS-M7Y) + (M7X << 8)
+//   oy = C*x + D*y + C*clip(HOFS-M7X) + D*clip(VOFS-M7Y) + (M7Y << 8)
+// Смещение «скролл - центр» обрезается до 10 бит со знаком, а у каждого
+// произведения, кроме A*x/C*x, отбрасываются младшие 6 бит.
+// Результат: цвет 0..255 (0 = прозрачно).
 SnesPPU::BgPixel SnesPPU::getMode7Pixel(int screenX, int screenY) const
 {
     auto sext13 = [](int16_t v) -> int {
         return (v & 0x1000) ? ((int)v | ~0x1FFF) : ((int)v & 0x1FFF);
     };
-    int hOff = sext13(m7HOFS_);
-    int vOff = sext13(m7VOFS_);
-    int cx   = sext13(m7X_);
-    int cy   = sext13(m7Y_);
+    auto clip10 = [](int v) -> int {
+        return (v & 0x2000) ? (v | ~0x3FF) : (v & 0x3FF);
+    };
+    const uint8_t m7sel = regs_[0x1A];
+    const int x = (m7sel & 0x01) ? 255 - screenX : screenX;
+    const int y = (m7sel & 0x02) ? 255 - screenY : screenY;
 
-    int dx = (screenX + hOff - cx);
-    int dy = (screenY + vOff - cy);
+    const int a = m7A_, b = m7B_, c = m7C_, d = m7D_;
+    const int cx = sext13(m7X_), cy = sext13(m7Y_);
+    const int hc = clip10(sext13(m7HOFS_) - cx);
+    const int vc = clip10(sext13(m7VOFS_) - cy);
 
-    int ox = ((m7A_ * dx) + (m7B_ * dy)) >> 8;
-    int oy = ((m7C_ * dx) + (m7D_ * dy)) >> 8;
-    ox += cx;
-    oy += cy;
+    int ox = ((a * hc) & ~63) + ((b * vc) & ~63) + ((b * y) & ~63) + (cx << 8) + a * x;
+    int oy = ((c * hc) & ~63) + ((d * vc) & ~63) + ((d * y) & ~63) + (cy << 8) + c * x;
+    ox >>= 8;
+    oy >>= 8;
 
-    // $211A M7SEL: bit0=зеркало по X, bit1=зеркало по Y, биты 7:6 = screen over
-    // (0x/00 = заворачивать карту, 10 = прозрачно, 11 = заполнять тайлом 0).
-    uint8_t m7sel = regs_[0x1A];
-    if (m7sel & 0x01) ox = ~ox;
-    if (m7sel & 0x02) oy = ~oy;
-
-    bool outOfMap = ((unsigned)ox >= 1024u) || ((unsigned)oy >= 1024u);
-    uint8_t overflowMode = (uint8_t)((m7sel >> 6) & 3);
-    if (outOfMap) {
-        if (overflowMode == 2) {
-            BgPixel r{0, false};  // прозрачно
-            return r;
-        }
-        if (overflowMode == 3) {
-            // Tile 0: показываем character 0 для overflow-региона
-            ox &= 7;
-            oy &= 7;
-        } else {
-            // wrap (modes 0/1)
-            ox &= 0x3FF;
-            oy &= 0x3FF;
-        }
+    // M7SEL биты 7:6 — что за краем карты 1024×1024: 0x = повтор карты,
+    // 10 = прозрачно, 11 = тайл 0.
+    const bool outOfMap = ((unsigned)ox >= 1024u) || ((unsigned)oy >= 1024u);
+    const uint8_t overflowMode = (uint8_t)((m7sel >> 6) & 3);
+    uint8_t tileNum;
+    if (outOfMap && overflowMode == 2) return BgPixel{0, false};
+    if (outOfMap && overflowMode == 3) {
+        tileNum = 0;
+    } else {
+        const uint16_t mapAddr = (uint16_t)((((oy >> 3) & 0x7F) << 7) | ((ox >> 3) & 0x7F));
+        tileNum = (uint8_t)(vram_[mapAddr] & 0xFF);
     }
 
-    // Тайловая карта 128×128 (одно слово на тайл, tile# в low-байте)
-    uint8_t  tileX   = (uint8_t)((ox >> 3) & 0x7F);
-    uint8_t  tileY   = (uint8_t)((oy >> 3) & 0x7F);
-    uint16_t mapAddr = (uint16_t)(tileY * 128 + tileX);
-    uint8_t  tileNum = (overflowMode == 3 && outOfMap) ? 0 : (uint8_t)(vram_[mapAddr] & 0xFF);
-
-    // Данные тайла: пиксель в hi-байте, 8×8 = 64 слова на тайл
-    int px = ox & 7;
-    int py = oy & 7;
-    uint16_t dataAddr = (uint16_t)(tileNum * 64 + py * 8 + px);
-    uint8_t  word     = (uint8_t)(vram_[dataAddr & 0x7FFF] >> 8);
-
-    if (word == 0) {
-        BgPixel r{0, false};
-        return r;
-    }
-    BgPixel r;
-    r.color    = word;
-    r.priority = false;
-    return r;
+    // Данные тайла: пиксель в старшем байте, 8×8 = 64 слова на тайл
+    const uint16_t dataAddr = (uint16_t)(tileNum * 64 + (oy & 7) * 8 + (ox & 7));
+    const uint8_t  color    = (uint8_t)(vram_[dataAddr & 0x7FFF] >> 8);
+    return BgPixel{color, false};
 }
 
 // ─── Спрайты ──────────────────────────────────────────────────────────────────
@@ -724,7 +710,7 @@ SnesPPU::ObjPixel SnesPPU::getObjPixel(int screenX, int screenY) const
 // ─── Рендеринг одной строки ───────────────────────────────────────────────────
 void SnesPPU::renderScanline(int y)
 {
-    if (y < 0 || y >= HEIGHT) return;
+    if (y < 0 || y >= MAX_HEIGHT) return;
 
     uint8_t brightness = this->brightness();
     bool    enabled    = displayEnabled();
@@ -810,14 +796,7 @@ void SnesPPU::renderScanline(int y)
     for (int x = 0; x < WIDTH; ++x) {
         uint32_t finalColor = cgToRGBA(cgram_[0], brightness);  // backdrop
 
-        if (mode == 7) {
-            bool m7Masked = (regs_[0x2E] & 1) && inWindowMask(0, x);
-            if ((mainEn & 1) && !m7Masked) {
-                BgPixel bp = getMode7Pixel(x, y);
-                if (bp.color != 0)
-                    finalColor = cgToRGBA(cgram_[bp.color], brightness);
-            }
-        } else {
+        {
             // Layer.src: 0=BG1, 1=BG2, 2=BG3, 3=BG4, 4=OBJ — для color math
             struct Layer { uint16_t cgColor; int prio; uint8_t src; bool objHiPal; };
             Layer mainLs[16]; int mainN = 0;
@@ -851,6 +830,37 @@ void SnesPPU::renderScanline(int y)
                 if ((subEnReg & (1 << bgIdx)) && !(masked && (subWin & (1 << bgIdx))))
                     subLs[subN++]   = { cgram_[bp.color], p, (uint8_t)bgIdx, false };
             };
+            // Слой из готового цвета (Mode 7): с окнами main/sub, как у pushBG.
+            auto pushColor = [&](int bgIdx, uint16_t cg, int p) {
+                bool masked = ((mainWin | subWin) & (1 << bgIdx)) && inWindowMask(bgIdx, x);
+                if ((mainEn   & (1 << bgIdx)) && !(masked && (mainWin & (1 << bgIdx))))
+                    mainLs[mainN++] = { cg, p, (uint8_t)bgIdx, false };
+                if ((subEnReg & (1 << bgIdx)) && !(masked && (subWin & (1 << bgIdx))))
+                    subLs[subN++]   = { cg, p, (uint8_t)bgIdx, false };
+            };
+
+            if (mode == 7) {
+                // Mode 7: OBJ3(10) > OBJ2(8) > BG2hi(7) > OBJ1(6) > BG1(4) >
+                // BG2lo(3) > OBJ0(2). BG2 есть только в режиме EXTBG ($2133 бит 6):
+                // те же данные, бит 7 — приоритет, цвет — младшие 7 бит.
+                int mx, my; mosaicXY(0, mx, my);
+                BgPixel bp = getMode7Pixel(mx, my);
+                if (bp.color != 0) {
+                    uint16_t cg = cgram_[bp.color];
+                    if (regs_[0x30] & 0x01) {           // прямой цвет: BBGGGRRR
+                        uint8_t c8 = bp.color;
+                        cg = (uint16_t)(((c8 & 0x07) << 2) | (((c8 >> 3) & 0x07) << 7)
+                                      | (((c8 >> 6) & 0x03) << 13));
+                    }
+                    pushColor(0, cg, 4);
+                }
+                if (regs_[0x33] & 0x40) {
+                    int mx2, my2; mosaicXY(1, mx2, my2);
+                    BgPixel b2 = getMode7Pixel(mx2, my2);
+                    if (b2.color & 0x7F)
+                        pushColor(1, cgram_[b2.color & 0x7F], (b2.color & 0x80) ? 7 : 3);
+                }
+            } else {
             // Приоритеты (выше = ближе к зрителю) по официальному порядку Mode 1:
             // OBJ3(10) > BG1hi(9) > BG2hi(8) > OBJ2(7) > BG1lo(6) > BG2lo(5) >
             // OBJ1(4) > BG3hi(3, или 11 если $2105.3) > OBJ0(2) > BG3lo(1).
@@ -870,11 +880,14 @@ void SnesPPU::renderScanline(int y)
                 }
             }
             pushBG(3, 0, 1);   // BG4 (только Mode 0)
+            }
 
             // ── OBJ ────────────────────────────────────────────────────────────
             // Спрайты с палитрой 4..7 участвуют в color math (objHiPal=true).
             if (nCached > 0) {
-                static const int kObjPrio[4] = { 2, 4, 7, 10 };  // OBJ prio 0..3 (Mode 1 порядок)
+                static const int kObjPrio[4]  = { 2, 4, 7, 10 };  // OBJ prio 0..3 (Mode 1 порядок)
+                static const int kObjPrio7[4] = { 2, 6, 8, 10 };  // Mode 7
+                const int* objPrio = (mode == 7) ? kObjPrio7 : kObjPrio;
                 uint16_t objBase = (uint16_t)((regs_[0x01] & 0x07) << 13);
                 for (int si = 0; si < nCached; ++si) {
                     int dx = x - (int)sprCache[si].x;
@@ -907,7 +920,7 @@ void SnesPPU::renderScanline(int y)
                     }
                     if (colorIdx == 0) continue;
                     uint8_t cgramIdx = (uint8_t)(0x80 + pal * 16 + colorIdx);
-                    Layer L = { cgram_[cgramIdx], kObjPrio[pri & 3], 4, (pal >= 4) };
+                    Layer L = { cgram_[cgramIdx], objPrio[pri & 3], 4, (pal >= 4) };
                     bool maskedObj = ((mainWin | subWin) & 0x10) && inWindowMask(4, x);
                     if ((mainEn   & 0x10) && !(maskedObj && (mainWin & 0x10)))
                         mainLs[mainN++] = L;
@@ -941,8 +954,22 @@ void SnesPPU::renderScanline(int y)
             uint8_t cgadsub = regs_[0x31];
             uint8_t cgwsel  = regs_[0x30];
 
+            // Цветовое окно ($2125 биты 4-7, логика $212B биты 2-3) решает, где
+            // главный экран гасится в чёрный (CGWSEL биты 7-6: никогда / вне
+            // окна / в окне / всегда) и где разрешена математика (биты 5-4:
+            // всегда / в окне / вне окна / никогда). Mario Kart разрешает её
+            // только в маленьком окне — без этого вся трасса белела.
+            const bool inColorWin = (cgwsel & 0xF0) && inWindowMask(5, x);
+            const int  blackMode  = (cgwsel >> 6) & 3;
+            const int  mathMode   = (cgwsel >> 4) & 3;
+            const bool clipBlack  = blackMode == 3 || (blackMode == 1 && !inColorWin)
+                                                   || (blackMode == 2 &&  inColorWin);
+            const bool mathWin    = mathMode == 0 || (mathMode == 1 &&  inColorWin)
+                                                  || (mathMode == 2 && !inColorWin);
+            if (clipBlack) mainColor = 0;
+
             bool mathOnLayer = false;
-            if (cgadsub != 0) {
+            if (cgadsub != 0 && mathWin) {
                 if      (mainSrc <= 3)              mathOnLayer = (cgadsub & (1 << mainSrc)) != 0;
                 else if (mainSrc == 4 && mainObjHi) mathOnLayer = (cgadsub & 0x10) != 0;
                 else if (mainSrc == 5)              mathOnLayer = (cgadsub & 0x20) != 0;
@@ -966,8 +993,9 @@ void SnesPPU::renderScanline(int y)
                 // вычитание без деления (затухание в чёрное), а получалось
                 // сложение с делением — экран белел (Street Fighter II).
                 bool subtract = (cgadsub & 0x80) != 0;
-                // Halve не применяется когда операнд — backdrop sub-screen'а
-                bool halve    = (cgadsub & 0x40) != 0 && useSub && !subIsBackdrop;
+                // Пополам не делится пиксель, погашенный в чёрный, и случай, когда
+                // вместо прозрачного sub-экрана подставлен фиксированный цвет.
+                bool halve    = (cgadsub & 0x40) != 0 && !clipBlack && !(useSub && subIsBackdrop);
 
                 int r1 = (mainColor       & 0x1F);
                 int g1 = ((mainColor >> 5) & 0x1F);

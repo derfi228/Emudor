@@ -37,7 +37,7 @@ public:
     uint32_t*       getFramebuffer()       override;
     const uint32_t* getFramebuffer() const override;
     int getFrameWidth()  const override { return SnesPPU::WIDTH;  }
-    int getFrameHeight() const override { return SnesPPU::HEIGHT; }
+    int getFrameHeight() const override { return ppu_.outputHeight(); }
 
     void setInput(int player, uint16_t buttons) override;
 

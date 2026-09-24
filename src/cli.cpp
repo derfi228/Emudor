@@ -82,6 +82,11 @@ CliArgs parseCli(int argc, char** argv)
             try { a.screenshotEvery = std::stoi(v); }
             catch (...) { a.errorMsg = "invalid --screenshot-every value"; return a; }
         }
+        else if (flag == "--screenshot-from") {
+            const char* v = needVal("--screenshot-from"); if (!v) return a;
+            try { a.screenshotFrom = std::stoi(v); }
+            catch (...) { a.errorMsg = "invalid --screenshot-from value"; return a; }
+        }
         else if (flag == "--headless") {
             a.headless = true;
         }
@@ -124,6 +129,7 @@ void printCliHelp()
         "  --screenshot <path>     Куда сохранить финальный скриншот (PNG)\n"
         "  --screenshot-every <N>  Сохранять скриншот каждые N кадров\n"
         "                          (нумеруются: name_0001.png, name_0002.png, ...)\n"
+        "  --screenshot-from <N>   Серию скриншотов начинать с кадра N\n"
         "  --headless              Не открывать SDL2 окно и ImGui — только эмуляция\n"
         "  --record-trace <path>   Записать лог трассировки CPU в файл\n"
         "  --help, -h              Показать эту справку\n"
@@ -434,6 +440,7 @@ int runHeadless(const CliArgs& args)
             // Промежуточные скриншоты
             if (args.screenshotEvery > 0 &&
                 !args.screenshotPath.empty() &&
+                frame + 1 >= args.screenshotFrom &&
                 ((frame + 1) % args.screenshotEvery == 0))
             {
                 std::string p = makeNumberedPath(args.screenshotPath, frame + 1);

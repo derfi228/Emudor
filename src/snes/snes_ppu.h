@@ -9,8 +9,9 @@ class SnesBus;
 // BG-режимы 0–7, 128 спрайтов, цветовая математика.
 class SnesPPU {
 public:
-    static constexpr int WIDTH  = 256;
-    static constexpr int HEIGHT = 224;  // стандартные NTSC-строки (SNES без overscan)
+    static constexpr int WIDTH      = 256;
+    static constexpr int HEIGHT     = 224;  // обычный кадр NTSC
+    static constexpr int MAX_HEIGHT = 239;  // режим overscan ($2133 бит 2)
 
     bool frameComplete = false;
     bool nmiPending    = false;
@@ -23,7 +24,7 @@ public:
     void    writeReg(uint16_t addr, uint8_t data);
     uint8_t readReg (uint16_t addr);
 
-    using Framebuffer = std::array<uint32_t, WIDTH * HEIGHT>;
+    using Framebuffer = std::array<uint32_t, WIDTH * MAX_HEIGHT>;
     const Framebuffer& framebuffer() const { return fb_; }
           Framebuffer& framebuffer()       { return fb_; }
 
@@ -39,6 +40,12 @@ public:
     uint16_t curDot()      const { return dot_; }
     uint16_t curScanline() const { return scanline_; }
 
+    // Первая строка VBlank: 225, а в режиме overscan (239 строк) — 240.
+    // Режим защёлкивается в начале кадра, как на железе.
+    uint16_t vblankStart() const { return overscan_ ? 240 : 225; }
+    // Высота последнего готового кадра: 224 или 239 строк.
+    int outputHeight() const { return lastOverscan_ ? MAX_HEIGHT : HEIGHT; }
+
 private:
     SnesBus* bus_ = nullptr;
     Framebuffer fb_{};
@@ -48,6 +55,8 @@ private:
 
     uint16_t scanline_ = 0;
     uint16_t dot_      = 0;
+    bool     overscan_     = false;  // режим 239 строк текущего кадра
+    bool     lastOverscan_ = false;  // режим уже отрисованного кадра
 
     // VRAM (64 KB = 32K слов)
     std::array<uint16_t, 0x8000> vram_{};

@@ -32,11 +32,12 @@ void SnesDSP1::reset()
     std::memset(inBuf_,  0, sizeof inBuf_);
     std::memset(outBuf_, 0, sizeof outBuf_);
     std::memset(mat_,    0, sizeof mat_);
-    fx_ = fy_ = fz_ = 0.0;
-    lfe_ = 0.0; les_ = 0.0; hgt_ = 0.0; vof_ = 0.0; rasterVs_ = 0;
+    sa_ = 0; ca_ = 1; sz_ = 0; cz_ = 1;
     nx_ = 0; ny_ = 0; nz_ = 1;
-    gx_ = 0; gy_ = 1; gz_ = 0;
-    hx_ = 1; hy_ = 0;
+    centreX_ = centreY_ = centreZ_ = 0;
+    gx_ = gy_ = gz_ = 0;
+    les_ = 0; vOffset_ = 0; secAzs_ = 1;
+    rasterVs_ = 0;
 }
 
 // ─── Status Register: вычисления мгновенные, всегда готов ─────────────────────
@@ -243,44 +244,62 @@ void SnesDSP1::exec()
     }
 
     // ── Parameter: задать камеру, вернуть центр экрана на земле и горизонт ───
+    // F — точка на земле, куда смотрит камера. Глаз висит над ней на расстоянии
+    // Lfe вдоль N = (-sin Azs·sin Aas, sin Azs·cos Aas, cos Azs), экран — на
+    // расстоянии Les от глаза. Выход: Vof, Vva (строка горизонта), Cx, Cy
+    // (точка земли в центре экрана — при Fz = 0 это сама F).
     case 0x02: case 0x32: {
-        fx_  = arg(0); fy_ = arg(1); fz_ = arg(2);
-        lfe_ = arg(3);
-        double les = arg(4);
+        const double fx = arg(0), fy = arg(1), fz = arg(2);
+        const double lfe = arg(3), les = arg(4);
+        const int16_t azsIn = arg(6);
+        sa_ = std::sin(angRad(arg(5))); ca_ = std::cos(angRad(arg(5)));
+        sz_ = std::sin(angRad(azsIn));  cz_ = std::cos(angRad(azsIn));
+
+        nx_ = -sz_ * sa_;  ny_ = sz_ * ca_;  nz_ = cz_;
+        centreX_ = fx + lfe * nx_;           // глаз
+        centreY_ = fy + lfe * ny_;
+        centreZ_ = fz + lfe * nz_;
+        gx_ = centreX_ - les * nx_;          // центр плоскости экрана
+        gy_ = centreY_ - les * ny_;
+        gz_ = centreZ_ - les * nz_;
         les_ = les;
-        double aas = angRad(arg(5));       // азимут (поворот вокруг вертикали)
-        double azs = angRad(arg(6));       // зенитный угол (отсчёт от вертикали)
 
-        double sa = std::sin(aas), ca = std::cos(aas);
-        double sz = std::sin(azs), cz = std::cos(azs);
+        // Чип ограничивает зенитный угол (~80°), чтобы горизонт не уходил в
+        // бесконечность; порог чуть растёт с высотой глаза.
+        static const int16_t kMaxAzs[16] = {
+            0x38B4, 0x38B7, 0x38BA, 0x38BE, 0x38C0, 0x38C4, 0x38C7, 0x38CA,
+            0x38CE, 0x38D0, 0x38D4, 0x38D7, 0x38DA, 0x38DD, 0x38E0, 0x38E4,
+        };
+        // Порог выбирается по числу ведущих битов высоты (нормализация 1.15).
+        const int16_t z16 = sat16(centreZ_);
+        int shift = 0;
+        for (int bit = 14; bit >= 0; --bit, ++shift)
+            if ((((z16 >> bit) & 1) != 0) != (z16 < 0)) break;
+        if (shift > 15) shift = 15;
+        int16_t maxAzs = kMaxAzs[shift];
+        int16_t azs = azsIn;
+        if (azs < 0) { if (azs < -maxAzs + 1) azs = (int16_t)(-maxAzs + 1); }
+        else if (azs > maxAzs) azs = maxAzs;
+        const double szc = std::sin(angRad(azs)), czc = std::cos(angRad(azs));
 
-        // Ортонормированный базис экрана в мировых осях
-        nx_ = -sz * sa;  ny_ =  sz * ca;  nz_ =  cz;   // направление взгляда
-        gx_ = -cz * sa;  gy_ =  cz * ca;  gz_ = -sz;   // «вверх» по экрану
-        hx_ =  ca;       hy_ =  sa;                    // «вправо» по экрану
+        // Точка земли в центре экрана: от глаза вдоль взгляда до земли.
+        const double c = (czc != 0.0) ? centreZ_ / czc * szc : 0.0;
+        centreX_ += c * sa_;
+        centreY_ -= c * ca_;
 
-        // Точка на земле в центре экрана — на расстоянии Les вдоль взгляда.
-        // Плоскость земли проходит через неё, значит высота точки обзора над
-        // землёй — это Les * Nz (в Fz игра высоту не передаёт, там всегда 0).
-        double cx = fx_ + les * nx_;
-        double cy = fy_ + les * ny_;
-        hgt_ = les * nz_;
+        vOffset_ = les * czc;
+        secAzs_  = (czc != 0.0) ? 1.0 / czc : 32767.0;
+        const double vva = (szc != 0.0) ? -vOffset_ / szc : -32768.0;
 
-        // Горизонт: строка, где луч идёт параллельно земле (Dz = 0)
-        double vva = (gz_ != 0.0) ? (-lfe_ * nz_ / gz_) : 0.0;
-
-        vof_ = 0.0;
         setOut(4);
-        put(0, sat16(vof_));
+        put(0, 0);                            // Vof: без поправки ограничения угла
         put(1, sat16(vva));
-        put(2, sat16(cx));
-        put(3, sat16(cy));
+        put(2, sat16(centreX_));
+        put(3, sat16(centreY_));
         break;
     }
 
     // ── Raster: матрица Mode 7 для одной строки ──────────────────────────────
-    // Луч из точки обзора через строку Vs пересекает землю на расстоянии t;
-    // производные точки пересечения по экранным осям и есть A/B/C/D.
     case 0x0A: case 0x1A: case 0x2A: case 0x3A: {
         rasterVs_ = arg(0);
         rasterOut();
@@ -288,39 +307,35 @@ void SnesDSP1::exec()
     }
 
     // ── Project: точка мира → экранные координаты и масштаб ──────────────────
+    // P — вектор от центра плоскости экрана; глубина от глаза = Les - P·N.
+    // H, V — проекции P на оси экрана, умноженные на Les/глубина; M — тот же
+    // масштаб в формате 8.8.
     case 0x06: case 0x16: case 0x26: case 0x36: {
-        double dx = (double)arg(0) - fx_;
-        double dy = (double)arg(1) - fy_;
-        double dz = (double)arg(2) - fz_;
-        double n  = dx * nx_ + dy * ny_ + dz * nz_;   // проекция на взгляд
+        const double px = (double)arg(0) - gx_;
+        const double py = (double)arg(1) - gy_;
+        const double pz = (double)arg(2) - gz_;
+        const double depth = les_ - (px * nx_ + py * ny_ + pz * nz_);
+        const double k = (depth != 0.0) ? les_ / depth : 32767.0;
+        const double h = px * ca_ + py * sa_;
+        const double v = px * (-cz_ * sa_) + py * (cz_ * ca_) + pz * (-sz_);
         setOut(3);
-        if (n <= 0.0) {                               // за спиной — не видно
-            put(0, 0x7FFF); put(1, 0x7FFF); put(2, 0);
-            break;
-        }
-        double h = dx * hx_ + dy * hy_;
-        double g = dx * gx_ + dy * gy_ + dz * gz_;
-        put(0, sat16( lfe_ * h / n));
-        put(1, sat16(-lfe_ * g / n - vof_));
-        put(2, sat16( lfe_ / n * kQ8));
+        put(0, sat16(h * k));
+        put(1, sat16(v * k));
+        put(2, sat16(k * kQ8));
         break;
     }
 
     // ── Target: экранные координаты → точка на земле ─────────────────────────
     case 0x0E: case 0x1E: case 0x2E: case 0x3E: {
-        double h  = arg(0);
-        double v  = -(double)arg(1) + vof_;
-        double dx = lfe_ * nx_ + h * hx_ + v * gx_;
-        double dy = lfe_ * ny_ + h * hy_ + v * gy_;
-        double dz = lfe_ * nz_ +           v * gz_;
-        double t  = (dz != 0.0) ? (hgt_ / dz) : 0.0;
+        const double h = arg(0), v = arg(1);
+        const double den = v * sz_ + vOffset_;
+        const double t = (den != 0.0) ? centreZ_ / den : 32767.0;
         setOut(2);
-        put(0, sat16(fx_ + t * dx));
-        put(1, sat16(fy_ + t * dy));
+        put(0, sat16(centreX_ + h * t * ca_ - v * t * secAzs_ * sa_));
+        put(1, sat16(centreY_ - h * t * sa_ + v * t * secAzs_ * ca_));
         break;
     }
 
-    // ── Attitude A/B/C: матрица вращения, умноженная на масштаб ──────────────
     case 0x01: case 0x05: case 0x31: case 0x35:
     case 0x11: case 0x15: case 0x21: case 0x25: {
         double m  = (double)arg(0) / kQ15;
@@ -383,20 +398,18 @@ void SnesDSP1::exec()
 }
 
 // ─── Матрица Mode 7 для строки rasterVs_ ─────────────────────────────────────
-// Луч из точки обзора через строку пересекает землю на расстоянии t;
-// производные точки пересечения по экранным осям и есть A/B/C/D.
+// Луч через строку Vs бьёт в землю с масштабом t = высота глаза /
+// (Vs·sin Azs + Les·cos Azs). По горизонтали экрана шаг по земле t вдоль
+// (cos Aas, sin Aas), по вертикали — t / cos Azs вдоль (-sin Aas, cos Aas).
 void SnesDSP1::rasterOut()
 {
-    // Номер строки растёт ВНИЗ по экрану, а ось g_ смотрит вверх — отсюда минус.
-    // Плоскость проекции стоит на расстоянии Les (в её центре масштаб ровно 1:1),
-    // поэтому вертикаль луча считается от Les, а не от Lfe.
-    double v  = -((double)rasterVs_ + vof_);
-    double dz = les_ * nz_ + v * gz_;
-    double t  = (dz != 0.0) ? (hgt_ / dz) : 0.0;
+    const double den = (double)rasterVs_ * sz_ + vOffset_;
+    const double t   = (den != 0.0) ? centreZ_ / den : 32767.0;
+    const double tv  = t * secAzs_;
     setOut(4);
-    put(0, sat16( t * hx_ * kQ8));   // An = du/dx
-    put(1, sat16(-t * gx_ * kQ8));   // Bn = du/dy (экранный y растёт вниз)
-    put(2, sat16( t * hy_ * kQ8));   // Cn = dv/dx
-    put(3, sat16(-t * gy_ * kQ8));   // Dn = dv/dy
+    put(0, sat16( t  * ca_ * kQ8));   // An
+    put(1, sat16(-tv * sa_ * kQ8));   // Bn
+    put(2, sat16( t  * sa_ * kQ8));   // Cn
+    put(3, sat16( tv * ca_ * kQ8));   // Dn
 }
 
