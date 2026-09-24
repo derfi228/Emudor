@@ -1,6 +1,8 @@
 // gb_bus.cpp — шина Game Boy: память, порты, таймер, джойпад, DMA, HDMA.
 #include "gb_bus.h"
 #include "console/state_io.h"
+#include <cstdio>
+#include <cstdlib>
 
 // ─── Инициализация: состояние после загрузчика ───────────────────────────────
 void GbBus::init(GbCart* cart, bool cgb)
@@ -21,9 +23,10 @@ void GbBus::init(GbCart* cart, bool cgb)
     dmaActive_ = false; dmaReg_ = 0xFF; dmaSrc_ = 0; dmaIndex_ = 0; dmaDelay_ = 0;
     hdmaSrc_ = 0; hdmaDst_ = 0; hdmaRemain_ = 0; hdmaActive_ = false; stall_ = 0;
     dots_ = 0;
+    serialLog_.clear();
     ppu.connect(&if_);
     ppu.reset(cgb);
-    apu.reset();
+    apu.reset(cgb);
 }
 
 // ─── Один M-цикл ──────────────────────────────────────────────────────────────
@@ -218,10 +221,19 @@ void GbBus::writeIO(uint16_t addr, uint8_t v)
         return;
     }
     case 0xFF01: sb_ = v; return;
-    case 0xFF02:
+    case 0xFF02: {
         sc_ = (uint8_t)(v & (cgb_ ? 0x83 : 0x81));
-        if ((v & 0x81) == 0x81) serialTimer_ = 8 * ((cgb_ && (v & 0x02)) ? 16 : 512);
+        if ((v & 0x81) == 0x81) {
+            serialTimer_ = 8 * ((cgb_ && (v & 0x02)) ? 16 : 512);
+            serialLog_.push_back((char)sb_);
+            if (serialLog_.size() > 1024) serialLog_.erase(0, serialLog_.size() - 1024);
+            // Тестовые ROM (Blargg) печатают результат в порт: EMUDOR_GB_SERIAL=1
+            // выводит отправленные байты в stdout.
+            static const bool s_serial = std::getenv("EMUDOR_GB_SERIAL") != nullptr;
+            if (s_serial) { std::fputc(sb_, stdout); std::fflush(stdout); }
+        }
         return;
+    }
     case 0xFF04: { const uint16_t old = div_; div_ = 0; divChanged(old, 0); return; }
     case 0xFF05: tima_ = v; timaReload_ = false; return;       // запись отменяет перезагрузку
     case 0xFF06: tma_ = v; return;

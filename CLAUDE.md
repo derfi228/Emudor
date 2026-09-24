@@ -111,7 +111,12 @@ cmake -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build buil
 - **GbPpu**: строка рисуется в конце режима 3; прерывание STAT по фронту общей линии (`gb_ppu.cpp`)
 - **GbApu**: 2 меандра, волна, шум, секвенсор 512 Гц, моно 44100 Гц (`gb_apu.cpp`)
 - **GbCart**: MBC1/2/3/5, часы MBC3, батарейка (`gb_cart.cpp`)
-- **GbConsole**: IConsole; кадр до VBlank (70224 точки). Диагностика: `EMUDOR_GB_TRACE=1`
+- **GbConsole**: IConsole; кадр до VBlank (70224 точки). Диагностика: `EMUDOR_GB_TRACE=1`,
+  `EMUDOR_GB_SERIAL=1` (вывод последовательного порта в stdout — так печатают тесты Blargg)
+- **Тестовые ROM** (в git не входят, кладутся в `roms/gb/tests`): Blargg из
+  github.com/retrio/gb-test-roms — `cpu_instrs.gb`, `instr_timing.gb`, `mem_timing.gb`,
+  `halt_bug.gb`, `dmg_sound.gb`; Matt Currie — `dmg-acid2.gb`, `cgb-acid2.gbc` (релизы на
+  GitHub). Все проходят; `tests/gb_testroms_test.cpp` гоняет их, если файлы на месте.
 
 ### Общее
 - **IConsole** (`src/console/iconsole.h`) — абстрактный интерфейс для всех консолей

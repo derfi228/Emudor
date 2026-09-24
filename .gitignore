@@ -24,6 +24,9 @@ roms/snes/*.sfc
 roms/snes/*.smc
 roms/gb/*.gb
 roms/gbc/*.gbc
+roms/gb/**/*.gb
+roms/gb/**/*.gbc
+roms/gbc/**/*.gbc
 roms/gba/*.gba
 roms/n64/*.z64
 roms/n64/*.n64

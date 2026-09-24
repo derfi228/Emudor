@@ -28,8 +28,9 @@ const float kHpfCharge = (float)std::pow(0.999958, kCyclesPerSample);
 } // namespace
 
 // ─── Сброс: состояние после загрузчика ───────────────────────────────────────
-void GbApu::reset()
+void GbApu::reset(bool cgb)
 {
+    cgb_ = cgb;
     ch_ = {};
     regs_.fill(0);
     power_ = true;
@@ -84,12 +85,15 @@ uint8_t GbApu::readPcm(int pair) const
 // ─── Ход времени ─────────────────────────────────────────────────────────────
 void GbApu::tick(int dots)
 {
+    waveJustRead_ = false;
     for (int n = 0; n < 4; ++n) {
         Channel& c = ch_[n];
         if (!c.enabled) continue;
         c.timer -= dots;
+        bool fetched = false;
         while (c.timer <= 0) {
             c.timer += period(n);
+            fetched = true;
             switch (n) {
             case 0: case 1: c.dutyPos = (uint8_t)((c.dutyPos + 1) & 7); break;
             case 2:
@@ -105,6 +109,9 @@ void GbApu::tick(int dots)
             }
             }
         }
+        // Сэмпл прочитан ровно в последнем такте — окно, в котором DMG
+        // пускает процессор к волновой памяти.
+        if (n == 2) waveJustRead_ = fetched && c.timer == period(2);
     }
 
     // Микширование: ЦАП даёт −1..1, NR51 раскладывает каналы по сторонам,
@@ -194,6 +201,13 @@ uint16_t GbApu::sweepCalc()
 void GbApu::trigger(int n)
 {
     Channel& c = ch_[n];
+    // DMG: перезапуск волны за такт до чтения сэмпла портит начало волновой
+    // памяти — туда копируется читаемый байт (или его выровненная четвёрка).
+    if (n == 2 && !cgb_ && c.enabled && c.timer <= 2) {
+        const int offset = ((c.wavePos + 1) >> 1) & 0x0F;
+        if (offset < 4) wave_[0] = wave_[offset];
+        else for (int i = 0; i < 4; ++i) wave_[i] = wave_[(offset & ~3) + i];
+    }
     c.enabled = c.dacOn;
     if (c.length == 0) {
         c.length = (n == 2) ? 256 : 64;
@@ -201,7 +215,7 @@ void GbApu::trigger(int n)
         // включена, железо сразу отнимает единицу.
         if (c.lengthEnable && (fsStep_ & 1)) --c.length;
     }
-    c.timer = period(n);
+    c.timer = period(n) + (n == 2 ? 6 : 0);   // волна начинает чтение с задержкой
     c.volume = c.envInit;
     c.envTimer = c.envPeriod;
     if (n == 2) c.wavePos = 0;
@@ -229,7 +243,15 @@ void GbApu::powerOff()
 // ─── Регистры ─────────────────────────────────────────────────────────────────
 uint8_t GbApu::read(uint16_t addr) const
 {
-    if (addr >= 0xFF30 && addr <= 0xFF3F) return wave_[addr - 0xFF30];
+    if (addr >= 0xFF30 && addr <= 0xFF3F) {
+        // Пока канал 3 играет, доступен только байт, который он сейчас читает
+        // (у DMG — лишь в момент чтения, иначе $FF).
+        if (ch_[2].enabled) {
+            if (!cgb_ && !waveJustRead_) return 0xFF;
+            return wave_[ch_[2].wavePos >> 1];
+        }
+        return wave_[addr - 0xFF30];
+    }
     if (addr < 0xFF10 || addr > 0xFF26) return 0xFF;
     const int i = addr - 0xFF10;
     if (addr == 0xFF26) {
@@ -242,14 +264,39 @@ uint8_t GbApu::read(uint16_t addr) const
 
 void GbApu::write(uint16_t addr, uint8_t v)
 {
-    if (addr >= 0xFF30 && addr <= 0xFF3F) { wave_[addr - 0xFF30] = v; return; }
+    if (addr >= 0xFF30 && addr <= 0xFF3F) {
+        if (ch_[2].enabled) {
+            if (!cgb_ && !waveJustRead_) return;
+            wave_[ch_[2].wavePos >> 1] = v;
+            return;
+        }
+        wave_[addr - 0xFF30] = v;
+        return;
+    }
     if (addr < 0xFF10 || addr > 0xFF26) return;
     if (addr == 0xFF26) {
         if (!(v & 0x80) && power_) powerOff();
-        else if ((v & 0x80) && !power_) { power_ = true; fsStep_ = 0; }
+        else if ((v & 0x80) && !power_) {
+            power_ = true;
+            fsStep_ = 0;
+            if (cgb_) for (auto& c : ch_) c.length = 0;   // у CGB счётчики сбрасываются
+        }
         return;
     }
-    if (!power_) return;                    // выключенный звук принимает только NR52
+    if (!power_) {
+        // Выключенный звук принимает только NR52 — но у DMG счётчики
+        // длительности (NRx1) остаются доступны для записи.
+        if (!cgb_) {
+            switch (addr) {
+            case 0xFF11: ch_[0].length = (uint16_t)(64 - (v & 0x3F)); break;
+            case 0xFF16: ch_[1].length = (uint16_t)(64 - (v & 0x3F)); break;
+            case 0xFF1B: ch_[2].length = (uint16_t)(256 - v); break;
+            case 0xFF20: ch_[3].length = (uint16_t)(64 - (v & 0x3F)); break;
+            default: break;
+            }
+        }
+        return;
+    }
     regs_[addr - 0xFF10] = v;
 
     const int n = (addr - 0xFF10) / 5;      // номер канала
@@ -314,7 +361,7 @@ void GbApu::write(uint16_t addr, uint8_t v)
 // ─── Save state ───────────────────────────────────────────────────────────────
 template<class S> void GbApu::serialize(S& s)
 {
-    s.io(ch_); s.io(regs_); s.io(wave_); s.io(power_); s.io(fsStep_);
+    s.io(ch_); s.io(regs_); s.io(wave_); s.io(power_); s.io(cgb_); s.io(waveJustRead_); s.io(fsStep_);
     s.io(sampleAcc_); s.io(sumOut_); s.io(hpfCap_);
 }
 

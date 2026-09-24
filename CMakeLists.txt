@@ -146,6 +146,7 @@ add_executable(nes_tests
     tests/snes_state_test.cpp
     tests/gb_cpu_test.cpp
     tests/gb_test.cpp
+    tests/gb_testroms_test.cpp
 )
 target_link_libraries(nes_tests PRIVATE
     nes_core

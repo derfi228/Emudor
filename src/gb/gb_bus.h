@@ -1,6 +1,7 @@
 #pragma once
 #include <array>
 #include <cstdint>
+#include <string>
 #include "gb_apu.h"
 #include "gb_cart.h"
 #include "gb_ppu.h"
@@ -44,6 +45,9 @@ public:
     bool    anyButtonPressed() const { return buttons_ != 0; }
 
     uint64_t dots() const { return dots_; }    // точек экрана с момента старта
+    // Что игра отправила в последовательный порт (тестовые ROM печатают туда
+    // результат). Хранятся последние 1024 байта.
+    const std::string& serialLog() const { return serialLog_; }
 
     template<class S> void serialize(S& s);
 
@@ -85,6 +89,7 @@ private:
     uint32_t stall_ = 0;                       // M-циклов, пока процессор стоит
 
     uint64_t dots_ = 0;
+    std::string serialLog_;
 
     void     tick();
     void     timerStep();

@@ -14,7 +14,7 @@ class GbApu {
 public:
     static constexpr int SAMPLE_RATE = 44100;
 
-    void reset();
+    void reset(bool cgb);
     void tick(int dots);                 // такты 4.19 МГц (не зависят от двойной скорости)
     void frameSequencerStep();           // 512 Гц, вызывает шина по делителю
 
@@ -55,6 +55,8 @@ private:
     std::array<uint8_t, 0x17> regs_{};   // $FF10-$FF26: записанные значения
     std::array<uint8_t, 16>   wave_{};
     bool     power_ = true;
+    bool     cgb_ = false;
+    bool     waveJustRead_ = false;      // канал 3 прочёл сэмпл в последнем такте
     uint8_t  fsStep_ = 0;
 
     // Выход
