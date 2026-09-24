@@ -107,13 +107,20 @@ private:
 
     int dsp1Select(uint8_t bank, uint16_t off) const;
 
+    // Карта памяти картриджа SuperFX для CPU
+    uint8_t readSuperFX (uint8_t bank, uint16_t off);
+    void    writeSuperFX(uint8_t bank, uint16_t off, uint8_t data);
+
     SnesPPU* ppu_ = nullptr;
     SnesAPU* apu_ = nullptr;
 
 public:
     // Доступ для SnesConsole: прогон GSU и наличие чипа
     bool     hasSuperFX() const { return hasSuperFX_; }
-    void     runSuperFX(int cycles) { if (hasSuperFX_) gsu_.run(cycles); }
+    void     runSuperFX(uint32_t masterClocks) { if (hasSuperFX_) gsu_.run(masterClocks); }
+    // IRQ от чипа картриджа (GSU по STOP) — уровень, висит до чтения $3031
+    bool     cartIrq() const { return hasSuperFX_ && gsu_.irqLine(); }
+    const SuperFX& superFX() const { return gsu_; }
 private:
 
     // Контроллер: регистры $4016/$4017 (16-бит для полного SNES-геймпада)

@@ -91,12 +91,21 @@ void SnesConsole::runFrame()
         // внутри кадра переворачивался.
         cpuUnits += 2;
         while (cpuUnits > 0) {
+            // IRQ от чипа картриджа (SuperFX) — уровень: висит, пока CPU его
+            // не снимет, и будит WAI даже при запрещённых прерываниях.
+            if (bus_.cartIrq()) {
+                cpu_.waiting_ = false;
+                if (!(cpu_.P & CPU65816::FLAG_I)) cpu_.irq();
+            }
             if (cpu_.stopped_ || cpu_.waiting_) { cpuUnits = 0; break; }
             cpu_.clock();
             cpuUnits -= (int)bus_.cpuCycleUnits()
                       * (cpu_.pendingCycles_ > 0 ? cpu_.pendingCycles_ : 2);
             cpuUnits -= (int)bus_.takeDmaUnits();   // блочная DMA тоже ест время
         }
+
+        // ── SuperFX/GSU: работает параллельно CPU, по 4 мастер-такта на дот ──
+        bus_.runSuperFX(MASTER_PER_PPU_DOT);
 
         // ── SPC700: интерлив по мастер-такту (конкурентно с CPU) ─────────────
         while (spcNextTick_ <= masterClock_) {
@@ -124,13 +133,6 @@ void SnesConsole::runFrame()
         // (Mario Kart в заезде просит H+V IRQ при vTarget = 0).
         if (dot % 341 == 0) {
             int scanline = dot / 341;
-
-            // SuperFX/GSU работает параллельно CPU (~3:1 по тактам)
-            // Бюджет GSU на сканлайн. Чип на 21 МГц успевает за строку около
-            // 1300 тактов, а инструкция занимает 1-3 такта — так что 256 шагов
-            // это в разы меньше реального. Игра ждёт окончания программы GSU в
-            // цикле, поэтому заниженный бюджет выглядит как зависание.
-            bus_.runSuperFX(1300);
 
             // HDMA шагает ТОЛЬКО по видимым строкам (1–224). В VBlank его гонять
             // нельзя: resetHDMA() на NMI (строка 225) уже выставил hdmaInit_, и
@@ -165,6 +167,15 @@ void SnesConsole::runFrame()
             apu_.dbgPort(0), apu_.dbgPort(1), apu_.dbgPort(2), apu_.dbgPort(3),
             apu_.dbgPortIn(0), apu_.dbgPortIn(1), apu_.dbgPortIn(2), apu_.dbgPortIn(3),
             apu_.dbgRam(0x04), apu_.dbgRam(0x05), cpu_.PC);
+    }
+
+    // ─── Диагностика SuperFX: состояние GSU раз в кадр (EMUDOR_GSU_TRACE) ────
+    static const bool s_gsuTrace = std::getenv("EMUDOR_GSU_TRACE") != nullptr;
+    if (s_gsuTrace && bus_.hasSuperFX()) {
+        const SuperFX& g = bus_.superFX();
+        fprintf(stderr, "f=%d GSU %s PBR:R15=%02X:%04X SFR=%04X insn=%llu | CPU %02X:%04X P=%02X wait=%d\n",
+                dbgFrames_, g.running() ? "RUN " : "stop", g.dbgPBR(), g.dbgR(15), g.dbgSFR(),
+                (unsigned long long)g.dbgInstructions(), cpu_.PBR, cpu_.PC, cpu_.P, (int)cpu_.waiting_);
     }
 
     // ─── Диагностика: трассировка CPU PC каждый кадр (EMUDOR_CPU_TRACE) ──────

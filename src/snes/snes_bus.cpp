@@ -78,8 +78,16 @@ bool SnesBus::loadROM(const std::string& path)
     // Инициализируем GSU после загрузки ROM
     hasSuperFX_ = superfx;
     if (superfx) {
-        uint32_t gsuRamKB = sramBytes ? (sramBytes / 1024u) : 32u;  // game-pak RAM для GSU
-        gsu_.connect(&rom_, gsuRamKB);
+        // Размер ОЗУ картриджа: у поздних игр он в расширенном заголовке
+        // ($FFDA = $33 → $FFBD), у ранних (GSU-1, Star Fox) заголовка нет,
+        // и у всех них 32 КБ.
+        uint32_t ramBytes = 32u * 1024u;
+        if (hdrBase + 0x1A < rom_.size() && rom_[hdrBase + 0x1A] == 0x33) {
+            uint8_t exp = rom_[hdrBase - 3];
+            if (exp >= 1 && exp <= 7) ramBytes = std::max(ramBytes, 1024u << exp);
+        }
+        ramBytes = std::max(ramBytes, sramBytes);
+        gsu_.connect(&rom_, ramBytes);
     }
 
     return true;
@@ -182,10 +190,10 @@ uint8_t SnesBus::readInternal(uint32_t addr)
         return wram_[waddr];
     }
 
-    // ── SuperFX/GSU регистры $3000–$32FF ─────────────────────────────────────
+    // ── SuperFX/GSU регистры $3000–$34FF ─────────────────────────────────────
     if (hasSuperFX_ && (bank <= 0x3F || (bank >= 0x80 && bank <= 0xBF))
-        && off >= 0x3000 && off <= 0x32FF) {
-        return gsu_.readReg(off);
+        && off >= 0x3000 && off <= 0x34FF) {
+        return gsu_.readIO(off);
     }
 
     // ── Системные регистры I/O ($2000–$5FFF в банках $00–$3F/$80–$BF) ─────────
@@ -198,13 +206,8 @@ uint8_t SnesBus::readInternal(uint32_t addr)
         return wram_[off];
     }
 
-    // ── Game-pak RAM SuperFX: банки $70-$71 (и зеркало $F0-$F1) ─────────────
-    // У CPU и у GSU это ОДНА память: CPU кладёт туда данные и забирает готовый
-    // кадр, GSU по ней считает. Раньше у них были разные буферы, и GSU видел
-    // пустую RAM — Star Fox не запускался.
-    if (hasSuperFX_ && ((bank >= 0x70 && bank <= 0x71) || (bank >= 0xF0 && bank <= 0xF1))) {
-        return gsu_.readRam((uint32_t)(((bank & 1) << 16) | off));
-    }
+    // ── Картридж SuperFX: своя карта ПЗУ/ОЗУ ─────────────────────────────────
+    if (hasSuperFX_) return readSuperFX(bank, off);
 
     // ── DSP-1: адреса зависят от типа картриджа (см. dsp1Select) ─────────────
     if (hasDSP1_) {
@@ -254,10 +257,10 @@ void SnesBus::write(uint32_t addr, uint8_t data)
         return;
     }
 
-    // ── SuperFX/GSU регистры $3000–$32FF ─────────────────────────────────────
+    // ── SuperFX/GSU регистры $3000–$34FF ─────────────────────────────────────
     if (hasSuperFX_ && (bank <= 0x3F || (bank >= 0x80 && bank <= 0xBF))
-        && off >= 0x3000 && off <= 0x32FF) {
-        gsu_.writeReg(off, data);
+        && off >= 0x3000 && off <= 0x34FF) {
+        gsu_.writeIO(off, data);
         return;
     }
 
@@ -267,11 +270,6 @@ void SnesBus::write(uint32_t addr, uint8_t data)
         return;
     }
 
-    // ── Game-pak RAM SuperFX: та же память, что видит GSU ───────────────────
-    if (hasSuperFX_ && ((bank >= 0x70 && bank <= 0x71) || (bank >= 0xF0 && bank <= 0xF1))) {
-        gsu_.writeRam((uint32_t)(((bank & 1) << 16) | off), data);
-        return;
-    }
 
     // ── DSP-1: пишется только DR, статус доступен лишь на чтение ─────────────
     if (hasDSP1_) {
@@ -288,6 +286,9 @@ void SnesBus::write(uint32_t addr, uint8_t data)
         return;
     }
 
+    // ── Картридж SuperFX: своя карта ПЗУ/ОЗУ ─────────────────────────────────
+    if (hasSuperFX_) { writeSuperFX(bank, off, data); return; }
+
     // ── SRAM / ROM ────────────────────────────────────────────────────────────
     switch (mapMode_) {
         case MapMode::LoROM:   writeLoROM(bank, off, data);  break;
@@ -295,6 +296,39 @@ void SnesBus::write(uint32_t addr, uint8_t data)
         case MapMode::ExHiROM: writeExHiROM(bank, off, data); break;
         default: break;
     }
+}
+
+// ─── Картридж SuperFX ─────────────────────────────────────────────────────────
+// Для CPU:  $00-$3F/$80-$BF: $6000-$7FFF — первые 8 КБ ОЗУ, $8000-$FFFF — ПЗУ
+//           по схеме LoROM; $40-$5F/$C0-$DF — ПЗУ линейно по 64 КБ;
+//           $70-$71/$F0-$F1 — ОЗУ картриджа (общее с GSU).
+// Пока GSU работает и держит шину (SCMR.RON/RAN), CPU не видит ни ПЗУ (читает
+// векторы в WRAM), ни ОЗУ (открытая шина) — так на железе, и игры это учитывают.
+uint8_t SnesBus::readSuperFX(uint8_t bank, uint16_t off)
+{
+    uint8_t b = (uint8_t)(bank & 0x7F);
+    if (b <= 0x3F) {
+        if (off >= 0x6000 && off < 0x8000)
+            return gsu_.ramLocked() ? openBus_ : gsu_.readRam(off & 0x1FFFu);
+        if (off < 0x8000 || rom_.empty()) return openBus_;
+        if (gsu_.romLocked()) return SuperFX::lockedRomByte(off);
+        return rom_[((uint32_t)b * 0x8000u + (off & 0x7FFFu)) % rom_.size()];
+    }
+    if (b <= 0x5F) {
+        if (rom_.empty()) return openBus_;
+        if (gsu_.romLocked()) return SuperFX::lockedRomByte(off);
+        return rom_[(((uint32_t)(b - 0x40) << 16) | off) % rom_.size()];
+    }
+    if (b == 0x70 || b == 0x71)
+        return gsu_.ramLocked() ? openBus_ : gsu_.readRam(((uint32_t)(b & 1) << 16) | off);
+    return openBus_;
+}
+
+void SnesBus::writeSuperFX(uint8_t bank, uint16_t off, uint8_t data)
+{
+    uint8_t b = (uint8_t)(bank & 0x7F);
+    if (b <= 0x3F && off >= 0x6000 && off < 0x8000) gsu_.writeRam(off & 0x1FFFu, data);
+    else if (b == 0x70 || b == 0x71) gsu_.writeRam(((uint32_t)(b & 1) << 16) | off, data);
 }
 
 // ─── LoROM ────────────────────────────────────────────────────────────────────
@@ -488,13 +522,22 @@ uint8_t SnesBus::readIO(uint16_t addr)
         // по строкам — без него CPU зависает навсегда.
         uint8_t v = 0;
         if (ppu_) {
-            if (ppu_->curScanline() >= 225) v |= 0x80;          // VBlank (строки 225-261)
-            uint16_t d = ppu_->curDot();
-            if (d >= 274 || d < 2)          v |= 0x40;          // HBlank (≈ dot 274-340 + 0-1)
+            int line = ppu_->curScanline();
+            int d    = ppu_->curDot();
+            if (line >= 225)       v |= 0x80;                   // VBlank (строки 225-261)
+            if (d >= 274 || d < 2) v |= 0x40;                   // HBlank (≈ dot 274-340 + 0-1)
+            // Бит 0 — «идёт авто-опрос джойпада». Железо читает пады в начале
+            // VBlank ~4224 мастер-такта (1056 дотов, чуть больше 3 строк), если
+            // он включён битом 0 в $4200. Игры ждут сначала появления бита, потом
+            // его снятия (Star Fox — перед каждым уровнем): вечный 0 их вешает.
+            if (nmitimen_ & 0x01) {
+                int t = (line - 225) * 341 + d - 32;              // дотов от старта опроса
+                if (t >= 0 && t < 1056) v |= 0x01;
+            }
         } else {
             v = vblankActive_ ? 0x80 : 0x00;
         }
-        return v;   // bit0 auto-joypad: у нас мгновенный → 0
+        return v;
     }
     // $4213 I/O port input
     if (addr == 0x4213) return 0xFF;

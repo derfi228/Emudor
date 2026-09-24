@@ -16,10 +16,11 @@ MSYS2 MinGW64, GCC 16, CMake 4.3, Ninja 1.13.
     8 голосов, огибающие, микс). Синхронизация — co-scheduler по мастер-такту.
     Звучат: Super Mario World, Zelda, Super Mario Kart. Молчат: EarthBound (KON не
     выставляется), Super Street Fighter II (драйвер грузится, но тишина). Эха (echo/FIR) нет.
-  - **DSP-1** — минимальная заглушка (Mario Kart грузится, меню/музыка ок; трассы нет).
-  - **SuperFX/GSU** — каркас есть, часть GSU-тест-ROM падает/чёрный экран.
+  - **DSP-1** — HLE на уровне команд (Mario Kart: трассы, перспектива Mode 7).
+  - **SuperFX/GSU** — полное ядро: конвейер с delay slot, кэш команд, буферы
+    ПЗУ/ОЗУ, плоттер PLOT/RPIX, блокировка шины, IRQ. Star Fox играется.
   - Не сделано: цветовая математика (color math/прозрачность) частично, эхо DSP,
-    полная математика DSP-1 и SuperFX-рендера.
+    полные save states SNES (сейчас только CPU/PPU-регистры/WRAM).
 - **GB, GBC, GBA, N64, PS1** — запланированы, не начаты.
 
 > Подробный живой статус (что играет, какие баги, скриншоты) — в `STATUS.md`.
@@ -90,8 +91,9 @@ cmake -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build buil
   Синхронизация CPU↔SPC700 — co-scheduler по общему мастер-такту (`SnesConsole::runFrame`):
   PPU тикает по доту, CPU раз в 2 дота, а SPC700 «дозревает» по `spcNextTick_`. Порты
   $2140–$2143 — просто общие массивы, без burst/flush (`src/snes/snes_apu.cpp`)
-- **SnesDSP1**: математический сопроцессор Mario Kart — заглушка (`src/snes/snes_dsp1.cpp`)
-- **SuperFX/GSU**: каркас (`src/snes/superfx.cpp`)
+- **SnesDSP1**: математический сопроцессор Mario Kart, HLE (`src/snes/snes_dsp1.cpp`)
+- **SuperFX/GSU**: ядро GSU + плоттер, общая с CPU game-pak RAM (`src/snes/superfx.cpp`).
+  Диагностика: `EMUDOR_GSU_TRACE=1` — состояние чипа и CPU раз в кадр
 
 ### Общее
 - **IConsole** (`src/console/iconsole.h`) — абстрактный интерфейс для всех консолей
