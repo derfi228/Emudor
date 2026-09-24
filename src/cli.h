@@ -15,6 +15,10 @@ struct CliArgs {
     std::string traceLogPath;     // --record-trace
     std::string inputScriptPath;  // --input-script (debug: воспроизведение нажатий)
     std::string loadSramPath;     // --load-sram (загрузить .srm/battery до старта)
+    std::string saveStatePath;    // --save-state PATH: сохранить состояние...
+    int         saveStateAt      = -1;     // --save-state-at N: ...после кадра N
+    std::string loadStatePath;    // --load-state PATH: загрузить состояние до старта
+    int         hashFrom         = 0;      // --hash-from K: хэш кадров и звука с кадра K
 
     bool        printHelp        = false;  // --help / -h
     std::string errorMsg;                  // непустое — ошибка парсинга

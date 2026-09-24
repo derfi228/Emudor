@@ -1,5 +1,7 @@
 // snes_console.cpp — реализация SnesConsole
 #include "snes_console.h"
+#include "state_io.h"
+#include <sstream>
 #include <ostream>
 #include <istream>
 #include <cstring>
@@ -243,62 +245,50 @@ void SnesConsole::setInput(int player, uint16_t buttons)
     }
 }
 
-// ─── Save State (формат "SNSS" v1) ───────────────────────────────────────────
+// ─── Save State (формат "SNSS" v2) ───────────────────────────────────────────
+// Полное состояние: CPU, PPU (VRAM/CGRAM/OAM и все защёлки), звук (SPC700,
+// DSP, 64 КБ ОЗУ, таймеры), шина (WRAM, SRAM, DMA/HDMA, IRQ, джойпад),
+// SuperFX и DSP-1, общая шкала тактов. v1 хранил только CPU/PPU-регистры/WRAM
+// и после загрузки картинка и звук разваливались.
 static constexpr uint32_t SNES_SAVE_MAGIC   = 0x53534E53u;  // "SNSS"
-static constexpr uint32_t SNES_SAVE_VERSION = 1u;
+static constexpr uint32_t SNES_SAVE_VERSION = 2u;
+
+template<class S> void SnesConsole::serialize(S& s)
+{
+    s.expect(SNES_SAVE_MAGIC);
+    s.expect(SNES_SAVE_VERSION);
+    s.expect(bus_.romHash());          // состояние от другой игры не подойдёт
+    cpu_.serialize(s);
+    ppu_.serialize(s);
+    apu_.serialize(s);
+    bus_.serialize(s);
+    s.io(masterClock_); s.io(spcNextTick_);
+    s.io(resamplePos_); s.io(lastMono_); s.io(dbgFrames_);
+}
 
 bool SnesConsole::saveState(std::ostream& os) const
 {
-    auto w8  = [&](uint8_t  v){ os.put((char)v); };
-    auto w16 = [&](uint16_t v){ w8((uint8_t)(v)); w8((uint8_t)(v >> 8)); };
-    auto w32 = [&](uint32_t v){ w8((uint8_t)(v)); w8((uint8_t)(v>>8)); w8((uint8_t)(v>>16)); w8((uint8_t)(v>>24)); };
-    auto w64 = [&](uint64_t v){ w32((uint32_t)(v)); w32((uint32_t)(v>>32)); };
-
-    w32(SNES_SAVE_MAGIC);
-    w32(SNES_SAVE_VERSION);
-
-    // CPU-регистры
-    w16(cpu_.A);  w16(cpu_.X);  w16(cpu_.Y);
-    w16(cpu_.SP); w16(cpu_.PC); w16(cpu_.D);
-    w8(cpu_.PBR); w8(cpu_.DBR); w8(cpu_.P);
-    w8(cpu_.E ? 1 : 0);
-    w64(cpu_.totalCycles_);
-
-    // PPU State
-    SnesPPU::State ps = ppu_.getState();
-    w16(ps.scanline);
-    w16(ps.dot);
-    os.write(reinterpret_cast<const char*>(ps.regs), sizeof(ps.regs));
-
-    // WRAM (128 KB)
-    os.write(reinterpret_cast<const char*>(bus_.wram()), (std::streamsize)SnesBus::WRAM_SIZE);
-
-    return os.good();
+    StateWriter w(os);
+    const_cast<SnesConsole*>(this)->serialize(w);   // запись ничего не меняет
+    return w.ok();
 }
 
+// Загрузка атомарная: если файл чужой, старый или обрезан — откатываемся к
+// состоянию до попытки, эмуляция не портится.
 bool SnesConsole::loadState(std::istream& is)
 {
-    auto r8  = [&]() -> uint8_t  { return (uint8_t)is.get(); };
-    auto r16 = [&]() -> uint16_t { uint8_t lo=r8(), hi=r8(); return (uint16_t)(lo|(hi<<8)); };
-    auto r32 = [&]() -> uint32_t { uint16_t lo=r16(), hi=r16(); return (uint32_t)(lo|(hi<<16)); };
-    auto r64 = [&]() -> uint64_t { uint32_t lo=r32(), hi=r32(); return (uint64_t)(lo)|((uint64_t)(hi)<<32); };
+    std::stringstream backup;
+    StateWriter w(backup);
+    serialize(w);
 
-    if (r32() != SNES_SAVE_MAGIC)   return false;
-    if (r32() != SNES_SAVE_VERSION) return false;
-
-    cpu_.A   = r16(); cpu_.X  = r16(); cpu_.Y  = r16();
-    cpu_.SP  = r16(); cpu_.PC = r16(); cpu_.D  = r16();
-    cpu_.PBR = r8();  cpu_.DBR = r8(); cpu_.P  = r8();
-    cpu_.E   = (r8() != 0);
-    cpu_.totalCycles_ = r64();
-
-    SnesPPU::State ps{};
-    ps.scanline = r16();
-    ps.dot      = r16();
-    is.read(reinterpret_cast<char*>(ps.regs), sizeof(ps.regs));
-    ppu_.setState(ps);
-
-    is.read(reinterpret_cast<char*>(bus_.wram()), (std::streamsize)SnesBus::WRAM_SIZE);
-
-    return is.good();
+    StateReader r(is);
+    serialize(r);
+    if (!r.ok()) {
+        StateReader undo(backup);
+        serialize(undo);
+        return false;
+    }
+    audioF_.clear();
+    apu_.clearSamples();
+    return true;
 }

@@ -98,6 +98,7 @@ private:
     // Save/Load
     bool                  showSaveModal_  = false;
     bool                  showLoadModal_  = false;
+    bool                  loadFailed_     = false;   // последняя загрузка не удалась
     bool                  showSettings_   = false;
     std::vector<SaveSlot> saveSlots_;
 
@@ -138,7 +139,7 @@ private:
     void saveState(int slot);
     void loadState(int slot);
     void saveStateToFile(const std::string& path);
-    void loadStateFromFile(const std::string& path);
+    bool loadStateFromFile(const std::string& path);   // false — файл не подошёл
     void triggerAutoSave();       // battery SRAM → sram.bin + autosave.sav
     void refreshSaveSlots();
 

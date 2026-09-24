@@ -33,6 +33,10 @@ public:
     const std::vector<int16_t>& samples() const { return samples_; }
     void clearSamples() { samples_.clear(); }
 
+    // Save state: поля перечислены один раз для записи и чтения
+    // (S = StateWriter / StateReader из console/state_io.h).
+    template<class S> void serialize(S& s);
+
     // Диагностика
     uint16_t dbgSpcPC()  const { return spcPC_; }
     uint8_t  dbgPort(uint8_t i) const { return portOut_[i & 3]; }

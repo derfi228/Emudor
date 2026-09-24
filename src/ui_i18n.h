@@ -34,6 +34,7 @@ struct I18nStrings {
     const char* cancel;
     const char* slot;
     const char* empty;
+    const char* loadFailed;   // загрузка состояния не удалась
 };
 
 const I18nStrings& GetI18n(Lang lang);

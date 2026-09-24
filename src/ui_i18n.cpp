@@ -9,6 +9,7 @@ static const I18nStrings kEn = {
     "+ Add folder...", "Language",
     "PAUSED", "Continue", "Save", "Load", "Exit to Menu",
     "Save Game", "Load Game", "Choose a slot:", "Cancel", "Save file", "empty",
+    "Can't load: this save is from another game or an older Emudor version.",
 };
 
 static const I18nStrings kRu = {
@@ -19,6 +20,7 @@ static const I18nStrings kRu = {
     u8"+ Добавить папку...", u8"Язык",
     u8"ПАУЗА", u8"Продолжить", u8"Сохранить", u8"Загрузить", u8"В меню",
     u8"Сохранение", u8"Загрузка", u8"Выберите слот:", u8"Отмена", u8"Слот", u8"пусто",
+    u8"Не загрузилось: сохранение от другой игры или от старой версии Emudor.",
 };
 
 static const I18nStrings kEs = {
@@ -29,6 +31,7 @@ static const I18nStrings kEs = {
     u8"+ Añadir carpeta...", u8"Idioma",
     u8"PAUSA", u8"Continuar", u8"Guardar", u8"Cargar", u8"Salir al menú",
     u8"Guardar partida", u8"Cargar partida", u8"Elige una ranura:", u8"Cancelar", u8"Ranura", u8"vacío",
+    u8"No se pudo cargar: la partida es de otro juego o de una versión anterior de Emudor.",
 };
 
 static const I18nStrings kZh = {
@@ -39,6 +42,7 @@ static const I18nStrings kZh = {
     u8"+ 添加文件夹...", u8"语言",
     u8"已暂停", u8"继续", u8"保存", u8"加载", u8"返回菜单",
     u8"保存游戏", u8"加载游戏", u8"选择一个存档位:", u8"取消", u8"存档", u8"空",
+    u8"无法加载：存档来自其他游戏或旧版 Emudor。",
 };
 
 static const I18nStrings kFr = {
@@ -49,6 +53,7 @@ static const I18nStrings kFr = {
     u8"+ Ajouter un dossier...", u8"Langue",
     u8"EN PAUSE", u8"Continuer", u8"Sauvegarder", u8"Charger", u8"Quitter",
     u8"Sauvegarder", u8"Charger", u8"Choisir un emplacement :", u8"Annuler", u8"Sauvegarde", u8"vide",
+    u8"Chargement impossible : sauvegarde d'un autre jeu ou d'une ancienne version d'Emudor.",
 };
 
 const I18nStrings& GetI18n(Lang lang) {

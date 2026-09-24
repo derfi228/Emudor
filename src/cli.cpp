@@ -87,6 +87,24 @@ CliArgs parseCli(int argc, char** argv)
             try { a.screenshotFrom = std::stoi(v); }
             catch (...) { a.errorMsg = "invalid --screenshot-from value"; return a; }
         }
+        else if (flag == "--save-state") {
+            const char* v = needVal("--save-state"); if (!v) return a;
+            a.saveStatePath = v;
+        }
+        else if (flag == "--save-state-at") {
+            const char* v = needVal("--save-state-at"); if (!v) return a;
+            try { a.saveStateAt = std::stoi(v); }
+            catch (...) { a.errorMsg = "invalid --save-state-at value"; return a; }
+        }
+        else if (flag == "--load-state") {
+            const char* v = needVal("--load-state"); if (!v) return a;
+            a.loadStatePath = v;
+        }
+        else if (flag == "--hash-from") {
+            const char* v = needVal("--hash-from"); if (!v) return a;
+            try { a.hashFrom = std::stoi(v); }
+            catch (...) { a.errorMsg = "invalid --hash-from value"; return a; }
+        }
         else if (flag == "--headless") {
             a.headless = true;
         }
@@ -130,6 +148,9 @@ void printCliHelp()
         "  --screenshot-every <N>  Сохранять скриншот каждые N кадров\n"
         "                          (нумеруются: name_0001.png, name_0002.png, ...)\n"
         "  --screenshot-from <N>   Серию скриншотов начинать с кадра N\n"
+        "  --save-state <path> --save-state-at <N>  Сохранить состояние после кадра N\n"
+        "  --load-state <path>     Загрузить состояние перед первым кадром\n"
+        "  --hash-from <K>         Напечатать хэш картинки и звука кадров с K-го\n"
         "  --headless              Не открывать SDL2 окно и ImGui — только эмуляция\n"
         "  --record-trace <path>   Записать лог трассировки CPU в файл\n"
         "  --help, -h              Показать эту справку\n"
@@ -416,6 +437,24 @@ int runHeadless(const CliArgs& args)
     size_t evIdx = 0;
     uint16_t btnState = 0;  // накапливаемое состояние кнопок
 
+    // ── Save state: загрузка до старта ───────────────────────────────────────
+    if (!args.loadStatePath.empty()) {
+        std::ifstream sf(args.loadStatePath, std::ios::binary);
+        if (!sf || !con->loadState(sf)) {
+            std::fprintf(stderr, "Не удалось загрузить состояние: %s\n", args.loadStatePath.c_str());
+            return 1;
+        }
+    }
+
+    // Хэш картинки и звука (FNV-1a): проверка, что загрузка состояния
+    // продолжает эмуляцию байт-в-байт так же, как без сохранения.
+    uint32_t videoHash = 2166136261u, audioHash = 2166136261u;
+    auto fnv = [](uint32_t h, const void* p, size_t n) {
+        const uint8_t* b = static_cast<const uint8_t*>(p);
+        for (size_t i = 0; i < n; ++i) { h ^= b[i]; h *= 16777619u; }
+        return h;
+    };
+
     // ── Основной цикл ────────────────────────────────────────────────────────
     int totalFrames = (args.frames > 0) ? args.frames : 600;  // дефолт для headless
     int rc = 0;
@@ -430,7 +469,19 @@ int runHeadless(const CliArgs& args)
             if (!events.empty()) con->setInput(0, btnState);
 
             con->runFrame();
+            if (args.hashFrom > 0 && frame + 1 >= args.hashFrom) {
+                videoHash = fnv(videoHash, con->getFramebuffer(),
+                    (size_t)con->getFrameWidth() * (size_t)con->getFrameHeight() * sizeof(uint32_t));
+                const auto& au = con->getAudioSamples();
+                audioHash = fnv(audioHash, au.data(), au.size() * sizeof(float));
+            }
             con->clearAudioSamples();   // не накапливать в headless
+
+            if (args.saveStateAt == frame + 1 && !args.saveStatePath.empty()) {
+                std::ofstream sf(args.saveStatePath, std::ios::binary | std::ios::trunc);
+                if (!sf || !con->saveState(sf))
+                    std::fprintf(stderr, "Не удалось сохранить состояние: %s\n", args.saveStatePath.c_str());
+            }
 
             // Трасса (минимальная — frame # на каждый кадр)
             if (traceOut) {
@@ -466,6 +517,9 @@ int runHeadless(const CliArgs& args)
         std::fprintf(stderr, "Crash: unknown exception\n");
         rc = 2;
     }
+
+    if (args.hashFrom > 0)
+        std::printf("hash video=%08X audio=%08X\n", videoHash, audioHash);
 
     if (traceOut) traceOut.close();
     IMG_Quit();

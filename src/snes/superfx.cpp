@@ -1,5 +1,6 @@
 // superfx.cpp — GSU (SuperFX): ядро с конвейером, кэш, буферы памяти, плоттер.
 #include "superfx.h"
+#include "console/state_io.h"
 #include <algorithm>
 #include <cstring>
 
@@ -700,3 +701,18 @@ void SuperFX::writeIO(uint16_t addr, uint8_t data)
     default: break;
     }
 }
+
+// ─── Save state ───────────────────────────────────────────────────────────────
+template<class S> void SuperFX::serialize(S& s)
+{
+    s.io(r_); s.io(sfr_); s.io(pbr_); s.io(rombr_); s.io(rambr_); s.io(cbr_);
+    s.io(scbr_); s.io(scmr_); s.io(colr_); s.io(por_); s.io(bramr_); s.io(vcr_);
+    s.io(cfgr_); s.io(clsr_);
+    s.io(pipeline_); s.io(sreg_); s.io(dreg_); s.io(r14Mod_); s.io(r15Mod_); s.io(ramaddr_);
+    s.io(romcl_); s.io(romdr_); s.io(ramcl_); s.io(ramar_); s.io(ramdr_);
+    s.io(cache_); s.io(cacheValid_); s.io(pixcache_);
+    s.vec(ram_);
+    s.io(budget_); s.io(clocks_); s.io(instructions_);
+}
+template void SuperFX::serialize<StateWriter>(StateWriter&);
+template void SuperFX::serialize<StateReader>(StateReader&);

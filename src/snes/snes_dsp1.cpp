@@ -1,5 +1,6 @@
 // snes_dsp1.cpp — HLE-эмуляция DSP-1 на уровне команд
 #include "snes_dsp1.h"
+#include "console/state_io.h"
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
@@ -413,3 +414,18 @@ void SnesDSP1::rasterOut()
     put(3, sat16( tv * ca_ * kQ8));   // Dn
 }
 
+
+// ─── Save state ───────────────────────────────────────────────────────────────
+template<class S> void SnesDSP1::serialize(S& s)
+{
+    s.io(command_); s.io(inBytes_); s.io(inIndex_); s.io(outBytes_); s.io(outIndex_);
+    s.io(inBuf_); s.io(outBuf_);
+    s.io(sa_); s.io(ca_); s.io(sz_); s.io(cz_);
+    s.io(nx_); s.io(ny_); s.io(nz_);
+    s.io(centreX_); s.io(centreY_); s.io(centreZ_);
+    s.io(gx_); s.io(gy_); s.io(gz_);
+    s.io(les_); s.io(vOffset_); s.io(secAzs_); s.io(rasterVs_);
+    s.io(mat_);
+}
+template void SnesDSP1::serialize<StateWriter>(StateWriter&);
+template void SnesDSP1::serialize<StateReader>(StateReader&);

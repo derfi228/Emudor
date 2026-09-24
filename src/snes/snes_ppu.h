@@ -37,6 +37,10 @@ public:
     void  setState(const State& s);
 
     // Текущая позиция луча (для $4212 HVBJOY: H/V-blank флаги)
+    // Save state: поля перечислены один раз для записи и чтения
+    // (S = StateWriter / StateReader из console/state_io.h).
+    template<class S> void serialize(S& s);
+
     uint16_t curDot()      const { return dot_; }
     uint16_t curScanline() const { return scanline_; }
 

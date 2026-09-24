@@ -137,6 +137,7 @@ add_executable(nes_tests
     tests/snes_bus_test.cpp
     tests/superfx_test.cpp
     tests/snes_dsp1_test.cpp
+    tests/snes_state_test.cpp
 )
 target_link_libraries(nes_tests PRIVATE
     nes_core

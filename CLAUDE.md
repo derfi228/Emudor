@@ -19,8 +19,9 @@ MSYS2 MinGW64, GCC 16, CMake 4.3, Ninja 1.13.
   - **DSP-1** — HLE на уровне команд (Mario Kart: трассы, перспектива Mode 7).
   - **SuperFX/GSU** — полное ядро: конвейер с delay slot, кэш команд, буферы
     ПЗУ/ОЗУ, плоттер PLOT/RPIX, блокировка шины, IRQ. Star Fox играется.
-  - Не сделано: цветовая математика (color math/прозрачность) частично, эхо DSP,
-    полные save states SNES (сейчас только CPU/PPU-регистры/WRAM).
+  - **Save states** полные: CPU, PPU (VRAM/CGRAM/OAM), звук (SPC700+DSP), шина с DMA,
+    SuperFX, DSP-1. Загрузка продолжает эмуляцию байт-в-байт; чужой/старый файл отвергается.
+  - Не сделано: эхо DSP.
 - **GB, GBC, GBA, N64, PS1** — запланированы, не начаты.
 
 > Подробный живой статус (что играет, какие баги, скриншоты) — в `STATUS.md`.
@@ -53,7 +54,10 @@ cmake --build build/release --parallel   # release
   --screenshot out.png --screenshot-every 60 --headless --record-trace trace.log
 ```
 Доступные флаги: `--rom`, `--console`, `--frames`, `--screenshot`,
-`--screenshot-every`, `--headless`, `--record-trace`, `--help`.
+`--screenshot-every`, `--screenshot-from`, `--headless`, `--record-trace`, `--input-script`,
+`--save-state <path> --save-state-at <N>`, `--load-state <path>`, `--hash-from <K>`, `--help`.
+Проверка save state: хэш прогона «N+M кадров» (`--hash-from N+1`) должен совпасть с хэшем
+«загрузка на кадре N + M кадров» (`--hash-from 1`).
 
 ### Тесты
 ```bash

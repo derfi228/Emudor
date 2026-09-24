@@ -1017,7 +1017,7 @@ void App::renderPauseOverlay() {
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, {0.0f, 10.0f});
     if (ImGui::Button(tr.continueBtn, {bw, 40})) state_ = AppState::Playing;
     if (ImGui::Button(tr.save,        {bw, 40})) { showSaveModal_ = true; showLoadModal_ = false; }
-    if (ImGui::Button(tr.load,        {bw, 40})) { showLoadModal_ = true; showSaveModal_ = false; }
+    if (ImGui::Button(tr.load,        {bw, 40})) { showLoadModal_ = true; showSaveModal_ = false; loadFailed_ = false; }
     ImGui::PushStyleColor(ImGuiCol_Text, ToVec4(theme_.accent));
     if (ImGui::Button(tr.exit, {bw, 40})) {
         if (console_) console_->reset();
@@ -1117,13 +1117,23 @@ void App::renderLoadModal() {
                 }
                 std::string lbl = slot.label + idSuffix;
                 if (ImGui::Button(lbl.c_str(), {310.0f, 36.0f})) {
-                    loadStateFromFile(slot.filename);
-                    showLoadModal_ = false;
-                    state_         = AppState::Playing;
-                    ImGui::CloseCurrentPopup();
+                    // Неподходящий файл (другая игра, старый формат) не трогает
+                    // игру: окно остаётся открытым и объясняет, в чём дело.
+                    loadFailed_ = !loadStateFromFile(slot.filename);
+                    if (!loadFailed_) {
+                        showLoadModal_ = false;
+                        state_         = AppState::Playing;
+                        ImGui::CloseCurrentPopup();
+                    }
                 }
                 if (slot.isAuto) ImGui::PopStyleColor(3);
             }
+        }
+        if (loadFailed_) {
+            ImGui::Spacing();
+            ImGui::PushTextWrapPos(310.0f);
+            ImGui::TextColored(ImVec4(0.90f, 0.25f, 0.25f, 1.0f), "%s", tr.loadFailed);
+            ImGui::PopTextWrapPos();
         }
         ImGui::Spacing(); ImGui::Separator();
         std::string cancelId = std::string(tr.cancel) + "##ld";
@@ -1687,11 +1697,11 @@ void App::saveStateToFile(const std::string& path) {
     console_->saveState(f);
 }
 
-void App::loadStateFromFile(const std::string& path) {
-    if (!console_) return;
+bool App::loadStateFromFile(const std::string& path) {
+    if (!console_) return false;
     std::ifstream f(path, std::ios::binary);
-    if (!f) return;
-    console_->loadState(f);
+    if (!f) return false;
+    return console_->loadState(f);
 }
 
 void App::saveState(int slot) {

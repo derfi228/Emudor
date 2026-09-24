@@ -19,6 +19,10 @@ public:
     void    writeDR(uint8_t v);   // запись Data Register ($6000)
     uint8_t readSR() const;       // чтение Status Register ($7000)
 
+    // Save state: поля перечислены один раз для записи и чтения
+    // (S = StateWriter / StateReader из console/state_io.h).
+    template<class S> void serialize(S& s);
+
 private:
     // ─── Протокол обмена ──────────────────────────────────────────────────────
     uint8_t command_  = 0;

@@ -53,6 +53,10 @@ public:
     // чтением $3031.
     bool irqLine() const { return (sfr_ & SFR_IRQ) != 0; }
 
+    // Save state: поля перечислены один раз для записи и чтения
+    // (S = StateWriter / StateReader из console/state_io.h).
+    template<class S> void serialize(S& s);
+
     // ── Отладка/тесты ────────────────────────────────────────────────────────
     uint16_t dbgR(int i) const { return r_[i & 15]; }
     uint16_t dbgSFR() const { return sfr_; }

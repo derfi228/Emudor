@@ -47,6 +47,13 @@ public:
     // Тип маппинга
     MapMode mapMode() const { return mapMode_; }
 
+    // Отпечаток ПЗУ (FNV-1a): save state помнит, от какой он игры.
+    uint32_t romHash() const { return romHash_; }
+
+    // Save state: поля перечислены один раз для записи и чтения
+    // (S = StateWriter / StateReader из console/state_io.h).
+    template<class S> void serialize(S& s);
+
     // Контроллеры (опрашиваются SnesConsole)
     uint16_t controller[2] = {0, 0};
 
@@ -93,6 +100,7 @@ private:
     std::vector<uint8_t> rom_;
     std::vector<uint8_t> sram_;   // battery-backed SRAM
     MapMode  mapMode_    = MapMode::Unknown;
+    uint32_t romHash_    = 0;
     bool     hasBattery_ = false;
     bool     sramDirty_  = false;
 

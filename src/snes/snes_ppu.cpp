@@ -1,5 +1,6 @@
 // snes_ppu.cpp — SNES PPU: рендер BG0-3, OBJ, Mode 0/1/7, цветовая математика
 #include "snes_ppu.h"
+#include "console/state_io.h"
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -1058,3 +1059,23 @@ void SnesPPU::setState(const State& s)
     dot_      = s.dot;
     std::memcpy(regs_, s.regs, sizeof(regs_));
 }
+
+// ─── Save state ───────────────────────────────────────────────────────────────
+// Кадровый буфер тоже сохраняем: после загрузки на паузе сразу видно нужный кадр.
+template<class S> void SnesPPU::serialize(S& s)
+{
+    s.io(frameComplete); s.io(nmiPending);
+    s.io(fb_); s.io(regs_);
+    s.io(scanline_); s.io(dot_); s.io(overscan_); s.io(lastOverscan_);
+    s.io(vram_); s.io(cgram_); s.io(oam_);
+    s.io(vramAddr_); s.io(vramHiLatch_); s.io(vramStep_); s.io(vramRemap_);
+    s.io(vramPrefetchLo_); s.io(vramPrefetchHi_);
+    s.io(cgramAddr_); s.io(cgramHalf_);
+    s.io(oamAddr_); s.io(oamFirstWrite_); s.io(oamLatch_);
+    s.io(scrollLatch_); s.io(bgHscroll_); s.io(bgVscroll_);
+    s.io(m7A_); s.io(m7B_); s.io(m7C_); s.io(m7D_); s.io(m7X_); s.io(m7Y_);
+    s.io(m7HOFS_); s.io(m7VOFS_); s.io(m7Latch_); s.io(m7MulB_);
+    s.io(coldata_); s.io(hvToggleH_); s.io(hvToggleV_);
+}
+template void SnesPPU::serialize<StateWriter>(StateWriter&);
+template void SnesPPU::serialize<StateReader>(StateReader&);

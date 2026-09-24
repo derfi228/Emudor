@@ -18,6 +18,7 @@
 // эталоном. DSP-конвейер готов и заработает, как только драйвер начнёт писать
 // регистры голосов. Игры при этом полностью рабочие визуально/по геймплею.
 #include "snes_apu.h"
+#include "console/state_io.h"
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
@@ -1396,3 +1397,17 @@ int SnesAPU::spcStep()
     }
     return 2;   // аппроксимация: средняя инструкция SPC700 ≈ 2 такта
 }
+
+// ─── Save state ───────────────────────────────────────────────────────────────
+// Буфер готовых сэмплов не сохраняем — он опустошается каждый кадр.
+template<class S> void SnesAPU::serialize(S& s)
+{
+    s.io(spcPC_); s.io(spcA_); s.io(spcX_); s.io(spcY_); s.io(spcSP_); s.io(spcPSW_);
+    s.io(ram_); s.io(dsp_); s.io(dspPhase_); s.io(dspKonLatch_);
+    s.io(spcCycleAccum_); s.io(voice_);
+    s.io(portIn_); s.io(portOut_); s.io(sampleDiv_);
+    s.io(timerPeriod_); s.io(timerIntern_); s.io(timerCounter_); s.io(timerDiv_);
+    s.io(timerEnabled_);
+}
+template void SnesAPU::serialize<StateWriter>(StateWriter&);
+template void SnesAPU::serialize<StateReader>(StateReader&);

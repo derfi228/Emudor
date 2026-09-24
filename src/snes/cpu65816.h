@@ -46,6 +46,10 @@ public:
     bool stopped_ = false;  // STP: ожидание RESET
     bool waiting_ = false;  // WAI: ожидание прерывания
 
+    // Save state: поля перечислены один раз для записи и чтения
+    // (S = StateWriter / StateReader из console/state_io.h).
+    template<class S> void serialize(S& s);
+
 private:
     SnesBus* bus_ = nullptr;
     uint32_t addrAbs_ = 0;

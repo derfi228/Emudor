@@ -77,4 +77,7 @@ private:
 
     // Диагностика
     int dbgFrames_ = 0;
+
+    // Save state: все блоки подряд (S = StateWriter / StateReader)
+    template<class S> void serialize(S& s);
 };

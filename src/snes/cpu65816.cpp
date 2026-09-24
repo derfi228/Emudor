@@ -1,4 +1,5 @@
 #include "snes/cpu65816.h"
+#include "console/state_io.h"
 #include "snes/snes_bus.h"
 #include <cstring>
 
@@ -1378,3 +1379,15 @@ void CPU65816::clock() {
 
     totalCycles_ += (uint64_t)pendingCycles_;
 }
+
+// ─── Save state ───────────────────────────────────────────────────────────────
+template<class S> void CPU65816::serialize(S& s)
+{
+    s.io(A); s.io(X); s.io(Y); s.io(SP); s.io(PC); s.io(D);
+    s.io(PBR); s.io(DBR); s.io(P); s.io(E);
+    s.io(totalCycles_); s.io(pendingCycles_);
+    s.io(stopped_); s.io(waiting_);
+    s.io(addrAbs_); s.io(opcode_);
+}
+template void CPU65816::serialize<StateWriter>(StateWriter&);
+template void CPU65816::serialize<StateReader>(StateReader&);

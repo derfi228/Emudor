@@ -2,6 +2,7 @@
 #include <cstdlib>
 // 24-битное адресное пространство, поддержка LoROM / HiROM / ExHiROM.
 #include "snes_bus.h"
+#include "console/state_io.h"
 #include "snes_ppu.h"
 #include "snes_apu.h"
 
@@ -98,6 +99,8 @@ void SnesBus::loadROMDirect(std::vector<uint8_t> data, MapMode mode, bool batter
 {
     rom_        = std::move(data);
     mapMode_    = mode;
+    romHash_    = 2166136261u;
+    for (uint8_t b : rom_) { romHash_ ^= b; romHash_ *= 16777619u; }
     hasBattery_ = battery;
     sramDirty_  = false;
     reset();
@@ -874,3 +877,24 @@ bool SnesBus::loadSram(const std::string& path)
     sramDirty_ = false;
     return f.good();
 }
+
+// ─── Save state ───────────────────────────────────────────────────────────────
+// ПЗУ не сохраняется (оно и так есть), зато сохраняются ОЗУ картриджа и оба
+// сопроцессора. Батарейная SRAM после загрузки считается изменённой — её
+// содержимое теперь из состояния, и оно должно попасть в .srm.
+template<class S> void SnesBus::serialize(S& s)
+{
+    s.io(wram_); s.vec(sram_);
+    s.io(openBus_); s.io(controller); s.io(dmaUnits_);
+    s.io(ctrlShift_); s.io(ctrlStrobe_); s.io(autoJoy_);
+    s.io(nmitimen_); s.io(nmiFlag_); s.io(vblankActive_); s.io(wramPort_);
+    s.io(hTarget_); s.io(vTarget_); s.io(irqPending_);
+    s.io(wrmpya_); s.io(wrdiv_); s.io(rddiv_); s.io(rdmpy_);
+    s.io(dma_); s.io(mdmaen_); s.io(hdmaen_); s.io(hdmaInit_); s.io(memsel_);
+    gsu_.serialize(s);
+    dsp1_.serialize(s);
+    if (S::reading && !sram_.empty()) sramDirty_ = true;
+}
+
+template void SnesBus::serialize<StateWriter>(StateWriter&);
+template void SnesBus::serialize<StateReader>(StateReader&);
