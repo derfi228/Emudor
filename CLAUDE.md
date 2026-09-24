@@ -14,8 +14,8 @@ MSYS2 MinGW64, GCC 16, CMake 4.3, Ninja 1.13.
   auto-joypad, multiply/divide).
   - **Звук работает**: SPC700 (полный набор опкодов) + DSP (настоящий BRR ADPCM,
     8 голосов, огибающие, микс). Синхронизация — co-scheduler по мастер-такту.
-    Звучат: Super Mario World, Zelda, Super Mario Kart. Молчат: EarthBound (KON не
-    выставляется), Super Street Fighter II (драйвер грузится, но тишина). Эха (echo/FIR) нет.
+    Звучат все игры из библиотеки: Super Mario World, Zelda, Super Mario Kart, Star Fox,
+    EarthBound, Super Street Fighter II (замер уровня выхода). Эха (echo/FIR) нет.
   - **DSP-1** — HLE на уровне команд (Mario Kart: трассы, перспектива Mode 7).
   - **SuperFX/GSU** — полное ядро: конвейер с delay slot, кэш команд, буферы
     ПЗУ/ОЗУ, плоттер PLOT/RPIX, блокировка шины, IRQ. Star Fox играется.
@@ -86,7 +86,8 @@ cmake -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build buil
 ### SNES
 - **CPU 65816**: 8/16-бит режимы, banking (`src/snes/cpu65816.cpp`)
 - **SnesBus**: HiROM/LoROM auto-detect, DMA, HDMA, auto-joypad, multiply/divide (`src/snes/snes_bus.cpp`)
-- **SnesPPU**: режимы 0-7, Mode 7 affine, sprite caching (`src/snes/snes_ppu.cpp`)
+- **SnesPPU**: режимы 0-7, Mode 7 (со спрайтами, EXTBG, прямым цветом), overscan 239 строк
+  ($2133 бит 2: VBlank на строке 240), цветовое окно CGWSEL (`src/snes/snes_ppu.cpp`)
 - **SnesAPU**: SPC700 (полный набор опкодов) + настоящий DSP (BRR ADPCM, 8 голосов).
   Синхронизация CPU↔SPC700 — co-scheduler по общему мастер-такту (`SnesConsole::runFrame`):
   PPU тикает по доту, CPU раз в 2 дота, а SPC700 «дозревает» по `spcNextTick_`. Порты
