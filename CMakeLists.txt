@@ -75,6 +75,12 @@ add_library(nes_core STATIC
     src/snes/snes_apu.cpp
     src/snes/superfx.cpp
     src/snes/snes_dsp1.cpp
+    src/console/gb_console.cpp
+    src/gb/gb_cart.cpp
+    src/gb/gb_cpu.cpp
+    src/gb/gb_ppu.cpp
+    src/gb/gb_apu.cpp
+    src/gb/gb_bus.cpp
 )
 target_include_directories(nes_core PUBLIC src)
 target_compile_features(nes_core PUBLIC cxx_std_17)
@@ -138,6 +144,8 @@ add_executable(nes_tests
     tests/superfx_test.cpp
     tests/snes_dsp1_test.cpp
     tests/snes_state_test.cpp
+    tests/gb_cpu_test.cpp
+    tests/gb_test.cpp
 )
 target_link_libraries(nes_tests PRIVATE
     nes_core

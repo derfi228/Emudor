@@ -190,7 +190,7 @@ void DrawControllerPad(ImDrawList* dl, ImVec2 pos, ImVec2 size,
         Letter(dl, xf, labelFont, 252, 40, 4.6f, "Y", IM_COL32(255,255,255,230));
         Letter(dl, xf, labelFont, 280, 40, 4.6f, "A", IM_COL32(255,255,255,230));
         Letter(dl, xf, labelFont, 266, 54, 4.6f, "B", IM_COL32(58,42,0,230));
-    } else if (consoleId == "GB") {
+    } else if (consoleId == "GB" || consoleId == "GBC") {
         DPad(dl, xf, 50, 36, 1.05f, plastic);
         Pill(dl, xf, 138, 40, 20, 6, -22.0f, plastic);
         Pill(dl, xf, 174, 46, 20, 6, -22.0f, plastic);

@@ -10,6 +10,7 @@
 #include "console/console_detect.h"
 #include "console/nes_console.h"
 #include "console/snes_console.h"
+#include "console/gb_console.h"
 
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
@@ -38,6 +39,7 @@ ConsoleType consoleFromName(const std::string& name)
                    [](unsigned char c){ return (char)std::toupper(c); });
     if (n == "NES")  return ConsoleType::NES;
     if (n == "SNES") return ConsoleType::SNES;
+    if (n == "GB" || n == "GBC") return ConsoleType::GB;
     return ConsoleType::Unknown;
 }
 
@@ -174,6 +176,7 @@ std::unique_ptr<IConsole> makeConsole(ConsoleType t)
     switch (t) {
     case ConsoleType::NES:  return std::make_unique<NesConsole>();
     case ConsoleType::SNES: return std::make_unique<SnesConsole>();
+    case ConsoleType::GB:   return std::make_unique<GbConsole>();
     default:                return nullptr;
     }
 }

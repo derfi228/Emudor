@@ -1,6 +1,7 @@
 #include "app.h"
 #include "console/nes_console.h"
 #include "console/snes_console.h"
+#include "console/gb_console.h"
 #include "console/console_detect.h"
 #include "ui_pads.h"
 #include <imgui.h>
@@ -119,6 +120,8 @@ static std::pair<int,std::string> downloadCoverTask(int romIndex, std::string ga
     // Системный путь в Libretro thumbnails
     std::string kSystem;
     if      (consoleId == "SNES") kSystem = "Nintendo - Super Nintendo Entertainment System";
+    else if (consoleId == "GB")   kSystem = "Nintendo - Game Boy";
+    else if (consoleId == "GBC")  kSystem = "Nintendo - Game Boy Color";
     else                          kSystem = "Nintendo - Nintendo Entertainment System";
 
     for (const auto& n : names) {
@@ -576,7 +579,7 @@ static void placeholderGradient(const std::string& name, ImU32& c1, ImU32& c2) {
 static const UiTheme::PadTint& padTintFor(const UiTheme& t, const std::string& console) {
     if (console == "NES")  return t.padNes;
     if (console == "SNES") return t.padSnes;
-    if (console == "GB")   return t.padGb;
+    if (console == "GB" || console == "GBC") return t.padGb;
     if (console == "GBA")  return t.padGba;
     if (console == "N64")  return t.padN64;
     if (console == "PS1")  return t.padPs1;
@@ -662,9 +665,9 @@ void App::renderMainMenu() {
         }
 
         if (addClicked) {
-            const char* filters[] = {"*.nes", "*.sfc", "*.smc", "*.fig", "*.swc"};
+            const char* filters[] = {"*.nes", "*.sfc", "*.smc", "*.fig", "*.swc", "*.gb", "*.gbc"};
             const char* romPath = tinyfd_openFileDialog(
-                "Add ROM to Library", "", 5, filters, "ROM files (NES/SNES)", 0);
+                "Add ROM to Library", "", 7, filters, "ROM files (NES/SNES/GB/GBC)", 0);
             if (romPath) addRomEntry(romPath);
         }
         if (hov) ImGui::SetTooltip("%s", tr.addRom);
@@ -1458,14 +1461,10 @@ void App::addRomEntry(const std::string& path) {
     rom.name    = fs::path(path).stem().string();
     rom.custom  = true;
     // Определяем тип консоли
-    switch (detectConsole(path)) {
-        case ConsoleType::NES:  rom.console = "NES";  break;
-        case ConsoleType::SNES: rom.console = "SNES"; break;
-        default: {
-            auto ext = fs::path(path).extension().string();
-            rom.console = ext.size() > 1 ? ext.substr(1) : "";
-            break;
-        }
+    rom.console = consoleIdFor(path);
+    if (rom.console.empty()) {
+        auto ext = fs::path(path).extension().string();
+        rom.console = ext.size() > 1 ? ext.substr(1) : "";
     }
     rom.cover  = findLocalCover(renderer_, path, rom.name);
 
@@ -1489,6 +1488,9 @@ void App::launchROM(const std::string& path) {
             break;
         case ConsoleType::SNES:
             newConsole = std::make_unique<SnesConsole>();
+            break;
+        case ConsoleType::GB:
+            newConsole = std::make_unique<GbConsole>();
             break;
         default:
             return;  // Неподдерживаемый формат
@@ -1565,11 +1567,7 @@ void App::scanRomsFolder() {
         rom.path    = p;
         rom.name    = entry.path().stem().string();
         rom.custom  = false;
-        switch (ct) {
-            case ConsoleType::NES:  rom.console = "NES";  break;
-            case ConsoleType::SNES: rom.console = "SNES"; break;
-            default:                rom.console = "";      break;
-        }
+        rom.console = consoleIdFor(p);
         rom.cover  = findLocalCover(renderer_, p, rom.name);
 
         int idx = (int)romList_.size();
@@ -1619,11 +1617,7 @@ void App::scanRomFolders()
             rom.path    = p;
             rom.name    = entry.path().stem().string();
             rom.custom  = false;
-            switch (ct) {
-                case ConsoleType::NES:  rom.console = "NES";  break;
-                case ConsoleType::SNES: rom.console = "SNES"; break;
-                default:                rom.console = "";      break;
-            }
+            rom.console = consoleIdFor(p);
             rom.cover = findLocalCover(renderer_, p, rom.name);
 
             int idx = (int)romList_.size();

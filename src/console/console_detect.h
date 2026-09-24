@@ -3,21 +3,41 @@
 #include <algorithm>
 
 // ─── Определение типа консоли по расширению файла ────────────────────────────
-enum class ConsoleType { Unknown, NES, SNES };
+enum class ConsoleType { Unknown, NES, SNES, GB };
 
-inline ConsoleType detectConsole(const std::string& path)
+// Расширение файла (всё после последней точки) в нижнем регистре.
+inline std::string romExtension(const std::string& path)
 {
-    // Берём расширение (всё после последней точки), переводим в нижний регистр
     auto pos = path.rfind('.');
-    if (pos == std::string::npos) return ConsoleType::Unknown;
-
+    if (pos == std::string::npos) return {};
     std::string ext = path.substr(pos + 1);
     std::transform(ext.begin(), ext.end(), ext.begin(),
                    [](unsigned char c){ return (char)std::tolower(c); });
+    return ext;
+}
 
+inline ConsoleType detectConsole(const std::string& path)
+{
+    const std::string ext = romExtension(path);
     if (ext == "nes")                      return ConsoleType::NES;
     if (ext == "sfc" || ext == "smc" ||
         ext == "fig" || ext == "swc")      return ConsoleType::SNES;
+    if (ext == "gb"  || ext == "gbc" ||
+        ext == "cgb" || ext == "sgb")      return ConsoleType::GB;
 
     return ConsoleType::Unknown;
+}
+
+// Идентификатор консоли для библиотеки и оформления: NES, SNES, GB, GBC.
+inline std::string consoleIdFor(const std::string& path)
+{
+    switch (detectConsole(path)) {
+    case ConsoleType::NES:  return "NES";
+    case ConsoleType::SNES: return "SNES";
+    case ConsoleType::GB: {
+        const std::string ext = romExtension(path);
+        return (ext == "gbc" || ext == "cgb") ? "GBC" : "GB";
+    }
+    default:                return {};
+    }
 }

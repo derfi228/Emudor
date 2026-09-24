@@ -22,7 +22,11 @@ MSYS2 MinGW64, GCC 16, CMake 4.3, Ninja 1.13.
   - **Save states** полные: CPU, PPU (VRAM/CGRAM/OAM), звук (SPC700+DSP), шина с DMA,
     SuperFX, DSP-1. Загрузка продолжает эмуляцию байт-в-байт; чужой/старый файл отвергается.
   - Не сделано: эхо DSP.
-- **GB, GBC, GBA, N64, PS1** — запланированы, не начаты.
+- **Game Boy / Game Boy Color** — работает. CPU SM83 (все 512 опкодов, точность до
+  M-цикла), PPU (фон, окно, спрайты, STAT, CGB-палитры и банки), APU (4 канала), таймер,
+  джойпад, OAM DMA, HDMA, двойная скорость CGB, MBC1/2/3 (с часами)/5, батарейка
+  (формат VBA/BGB), save states. Режим (DMG/CGB) — по заголовку картриджа.
+- **GBA, N64, PS1** — запланированы, не начаты.
 
 > Подробный живой статус (что играет, какие баги, скриншоты) — в `STATUS.md`.
 
@@ -50,7 +54,7 @@ cmake --build build/release --parallel   # release
 
 ### Headless-режим (для агентов / автотестов)
 ```bash
-./build/debug/emudor.exe --rom <path> --console NES|SNES --frames N \
+./build/debug/emudor.exe --rom <path> --console NES|SNES|GB --frames N \
   --screenshot out.png --screenshot-every 60 --headless --record-trace trace.log
 ```
 Доступные флаги: `--rom`, `--console`, `--frames`, `--screenshot`,
@@ -99,6 +103,15 @@ cmake -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build buil
 - **SnesDSP1**: математический сопроцессор Mario Kart, HLE (`src/snes/snes_dsp1.cpp`)
 - **SuperFX/GSU**: ядро GSU + плоттер, общая с CPU game-pak RAM (`src/snes/superfx.cpp`).
   Диагностика: `EMUDOR_GSU_TRACE=1` — состояние чипа и CPU раз в кадр
+
+### Game Boy / Game Boy Color (`src/gb/`)
+- **GbCpu**: SM83, каждое обращение к памяти — M-цикл через шину (`gb_cpu.cpp`)
+- **GbBus**: карта памяти, таймер (спад бита делителя), джойпад, OAM DMA, HDMA,
+  банки WRAM/двойная скорость CGB (`gb_bus.cpp`)
+- **GbPpu**: строка рисуется в конце режима 3; прерывание STAT по фронту общей линии (`gb_ppu.cpp`)
+- **GbApu**: 2 меандра, волна, шум, секвенсор 512 Гц, моно 44100 Гц (`gb_apu.cpp`)
+- **GbCart**: MBC1/2/3/5, часы MBC3, батарейка (`gb_cart.cpp`)
+- **GbConsole**: IConsole; кадр до VBlank (70224 точки). Диагностика: `EMUDOR_GB_TRACE=1`
 
 ### Общее
 - **IConsole** (`src/console/iconsole.h`) — абстрактный интерфейс для всех консолей
