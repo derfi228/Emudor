@@ -81,6 +81,9 @@ add_library(nes_core STATIC
     src/gb/gb_ppu.cpp
     src/gb/gb_apu.cpp
     src/gb/gb_bus.cpp
+    src/console/n64_console.cpp
+    src/n64/n64_cpu.cpp
+    src/n64/n64_system.cpp
 )
 target_include_directories(nes_core PUBLIC src)
 target_compile_features(nes_core PUBLIC cxx_std_17)
@@ -147,6 +150,7 @@ add_executable(nes_tests
     tests/gb_cpu_test.cpp
     tests/gb_test.cpp
     tests/gb_testroms_test.cpp
+    tests/n64_test.cpp
 )
 target_link_libraries(nes_tests PRIVATE
     nes_core

@@ -2,6 +2,7 @@
 #include "console/nes_console.h"
 #include "console/snes_console.h"
 #include "console/gb_console.h"
+#include "console/n64_console.h"
 #include "console/console_detect.h"
 #include "ui_pads.h"
 #include <imgui.h>
@@ -122,6 +123,7 @@ static std::pair<int,std::string> downloadCoverTask(int romIndex, std::string ga
     if      (consoleId == "SNES") kSystem = "Nintendo - Super Nintendo Entertainment System";
     else if (consoleId == "GB")   kSystem = "Nintendo - Game Boy";
     else if (consoleId == "GBC")  kSystem = "Nintendo - Game Boy Color";
+    else if (consoleId == "N64")  kSystem = "Nintendo - Nintendo 64";
     else                          kSystem = "Nintendo - Nintendo Entertainment System";
 
     for (const auto& n : names) {
@@ -339,7 +341,9 @@ void App::handleEvents(bool& running) {
 
     if (state_ == AppState::Playing && console_) {
         const uint8_t* kb = SDL_GetKeyboardState(nullptr);
-        bool isSnes = console_->getConsoleName() == "SNES";
+        // N64 берёт раскладку SNES; стрелки — C-кнопки (биты 3-0).
+        const bool isN64 = console_->getConsoleName() == "N64";
+        bool isSnes = console_->getConsoleName() == "SNES" || isN64;
         const KeyConfig& kc = isSnes ? snesKeys_ : nesKeys_;
 
         if (isSnes) {
@@ -358,6 +362,12 @@ void App::handleEvents(bool& running) {
             if (kb[SDL_GetScancodeFromKey(kc.x)])      ctrl |= (1u<< 6);
             if (kb[SDL_GetScancodeFromKey(kc.l)])      ctrl |= (1u<< 5);
             if (kb[SDL_GetScancodeFromKey(kc.rsh)])    ctrl |= (1u<< 4);
+            if (isN64) {
+                if (kb[SDL_SCANCODE_UP])    ctrl |= (1u<<3);
+                if (kb[SDL_SCANCODE_DOWN])  ctrl |= (1u<<2);
+                if (kb[SDL_SCANCODE_LEFT])  ctrl |= (1u<<1);
+                if (kb[SDL_SCANCODE_RIGHT]) ctrl |= (1u<<0);
+            }
             console_->setInput(0, ctrl);
         } else {
             // NES 8-бит: A|B|Sel|Sta|Up|Dn|L|R
@@ -665,9 +675,10 @@ void App::renderMainMenu() {
         }
 
         if (addClicked) {
-            const char* filters[] = {"*.nes", "*.sfc", "*.smc", "*.fig", "*.swc", "*.gb", "*.gbc"};
+            const char* filters[] = {"*.nes", "*.sfc", "*.smc", "*.fig", "*.swc", "*.gb", "*.gbc",
+                                     "*.z64", "*.n64", "*.v64"};
             const char* romPath = tinyfd_openFileDialog(
-                "Add ROM to Library", "", 7, filters, "ROM files (NES/SNES/GB/GBC)", 0);
+                "Add ROM to Library", "", 10, filters, "ROM files (NES/SNES/GB/GBC/N64)", 0);
             if (romPath) addRomEntry(romPath);
         }
         if (hov) ImGui::SetTooltip("%s", tr.addRom);
@@ -1491,6 +1502,9 @@ void App::launchROM(const std::string& path) {
             break;
         case ConsoleType::GB:
             newConsole = std::make_unique<GbConsole>();
+            break;
+        case ConsoleType::N64:
+            newConsole = std::make_unique<N64Console>();
             break;
         default:
             return;  // Неподдерживаемый формат

@@ -31,6 +31,9 @@ roms/gba/*.gba
 roms/n64/*.z64
 roms/n64/*.n64
 roms/n64/*.v64
+roms/n64/**/*.N64
+roms/n64/**/*.n64
+roms/n64/**/*.z64
 roms/ps1/*.bin
 roms/ps1/*.iso
 roms/ps1/*.cue
