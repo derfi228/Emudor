@@ -26,7 +26,13 @@ MSYS2 MinGW64, GCC 16, CMake 4.3, Ninja 1.13.
   M-цикла), PPU (фон, окно, спрайты, STAT, CGB-палитры и банки), APU (4 канала), таймер,
   джойпад, OAM DMA, HDMA, двойная скорость CGB, MBC1/2/3 (с часами)/5, батарейка
   (формат VBA/BGB), save states. Режим (DMG/CGB) — по заголовку картриджа.
-- **GBA, N64, PS1** — запланированы, не начаты.
+- **Nintendo 64** — в работе. Процессор VR4300 (MIPS III целиком: 64-битные операции,
+  слоты задержки, likely-переходы, COP0 с исключениями/TLB/Count-Compare, FPU с флагами
+  и режимами округления), шина RCP (MI/VI/AI/PI/SI/RI, регистры и DMA SP/DP), PIF (HLE
+  загрузки, джойбас, EEPROM, ответ CIC 6105), SRAM, вывод VI 16/32 бит. Настоящий IPL3
+  картриджа исполняется — контрольная сумма сходится. Super Mario 64 и Zelda OoT доходят
+  до первой задачи RSP. Не сделано: RSP (скаляр + вектор), RDP, звук от RSP.
+- **GBA, PS1** — запланированы, не начаты.
 
 > Подробный живой статус (что играет, какие баги, скриншоты) — в `STATUS.md`.
 
@@ -54,7 +60,7 @@ cmake --build build/release --parallel   # release
 
 ### Headless-режим (для агентов / автотестов)
 ```bash
-./build/debug/emudor.exe --rom <path> --console NES|SNES|GB --frames N \
+./build/debug/emudor.exe --rom <path> --console NES|SNES|GB|N64 --frames N \
   --screenshot out.png --screenshot-every 60 --headless --record-trace trace.log
 ```
 Доступные флаги: `--rom`, `--console`, `--frames`, `--screenshot`,
@@ -117,6 +123,20 @@ cmake -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build buil
   github.com/retrio/gb-test-roms — `cpu_instrs.gb`, `instr_timing.gb`, `mem_timing.gb`,
   `halt_bug.gb`, `dmg_sound.gb`; Matt Currie — `dmg-acid2.gb`, `cgb-acid2.gbc` (релизы на
   GitHub). Все проходят; `tests/gb_testroms_test.cpp` гоняет их, если файлы на месте.
+
+### Nintendo 64 (`src/n64/`)
+- **Vr4300** (`n64_cpu.cpp`): интерпретатор, 2 такта на команду (Count +1). Кэши не
+  моделируются. Состояние после PIF — как на железе: Status=0x241000E0 (KX/SX/UX → промах
+  TLB идёт на вектор XTLB 0x080), EPC/ErrorEPC/BadVAddr = все единицы
+- **N64System** (`n64_system.cpp`): память big-endian, расписание событий (строка VI, DMA
+  PI/SI, буфер AI). Загрузка: IPL3 → DMEM, RI_SELECT≠0 (IPL3 пропускает настройку RDRAM),
+  osMemSize — сами. CIC — по CRC32 IPL3, ТВ-стандарт — по региону, тип сохранения — по коду игры
+- **N64Console**: раскладка SNES, крестовина → стик, стрелки → C-кнопки
+- Диагностика: `EMUDOR_N64_TRACE=1` (состояние раз в кадр), `EMUDOR_N64_ISV=1` (вывод IS-Viewer)
+- **Тестовые ROM** (в git не входят): github.com/PeterLemon/N64 → `roms/n64/tests`
+  (CPUTest, RSPTest, RDPTest, …). Результат — зелёные PASS / красные FAIL на экране.
+  Из CPUTest проходят все, кроме TIMING (нет модели кэша/задержек шины) и
+  DMAAlignment-PI (причуды невыровненного PI DMA). FPUCompare/COP1FullMode — таблицы без оценки.
 
 ### Общее
 - **IConsole** (`src/console/iconsole.h`) — абстрактный интерфейс для всех консолей
