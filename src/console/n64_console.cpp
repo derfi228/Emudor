@@ -1,7 +1,9 @@
 // n64_console.cpp — Nintendo 64 как IConsole.
 #include "n64_console.h"
+#include "state_io.h"
 #include <fstream>
 #include <iterator>
+#include <sstream>
 
 bool N64Console::loadROM(const std::string& path)
 {
@@ -49,6 +51,43 @@ bool N64Console::saveSram(const std::string& path) const
     const std::vector<uint8_t> data = sys_.saveData();
     f.write(reinterpret_cast<const char*>(data.data()), (std::streamsize)data.size());
     return f.good();
+}
+
+// ─── Save state ("N64S" v1): ~8 МБ — почти всё RDRAM ─────────────────────────
+static constexpr uint32_t N64_SAVE_MAGIC   = 0x5334364Eu;   // "N64S"
+static constexpr uint32_t N64_SAVE_VERSION = 1u;
+
+template<class S> void N64Console::serialize(S& s)
+{
+    s.expect(N64_SAVE_MAGIC);
+    s.expect(N64_SAVE_VERSION);
+    s.expect(sys_.romHash());
+    sys_.serialize(s);
+}
+
+bool N64Console::saveState(std::ostream& os) const
+{
+    StateWriter w(os);
+    const_cast<N64Console*>(this)->serialize(w);    // запись ничего не меняет
+    return w.ok();
+}
+
+// Загрузка атомарная: чужой или обрезанный файл откатывается.
+bool N64Console::loadState(std::istream& is)
+{
+    std::stringstream backup;
+    StateWriter w(backup);
+    serialize(w);
+
+    StateReader r(is);
+    serialize(r);
+    if (!r.ok()) {
+        StateReader undo(backup);
+        serialize(undo);
+        return false;
+    }
+    sys_.clearSamples();
+    return true;
 }
 
 bool N64Console::loadSram(const std::string& path)

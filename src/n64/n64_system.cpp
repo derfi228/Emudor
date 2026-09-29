@@ -1,5 +1,6 @@
 // n64_system.cpp — шина Nintendo 64: регистры RCP, PIF, картридж, загрузка.
 #include "n64_system.h"
+#include "console/state_io.h"
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
@@ -55,6 +56,8 @@ bool N64System::loadRom(std::vector<uint8_t> data)
         return false;
     }
     rom_ = std::move(data);
+    romHash_ = 2166136261u;                        // FNV-1a: состояние от другой игры не подойдёт
+    for (uint8_t b : rom_) { romHash_ ^= b; romHash_ *= 16777619u; }
     detectCartridge();
     reset();
     return true;
@@ -713,6 +716,41 @@ void N64System::renderFrame()
         }
     }
 }
+
+// ─── Save state ───────────────────────────────────────────────────────────────
+template<class S> void N64System::serialize(S& s)
+{
+    s.vec(rdram_);
+    s.io(spMem_);
+    s.io(pifRam_);
+    s.vec(eeprom_);
+    s.vec(sram_);
+    s.io(save_);
+    s.io(eventAt_);
+    s.io(miMode_); s.io(miIntr_); s.io(miMask_);
+    s.io(vi_); s.io(viLine_); s.io(viField_); s.io(frames_);
+    s.io(frameW_); s.io(frameH_);
+    if (S::reading) frame_.resize((size_t)frameW_ * frameH_);
+    s.vec(frame_);
+    for (auto& b : aiFifo_) { s.io(b.addr); s.io(b.len); }
+    s.io(aiCount_); s.io(aiDramAddr_); s.io(aiControl_); s.io(aiDacRate_); s.io(aiBitRate_);
+    s.io(aiStart_); s.io(aiDuration_); s.io(aiResample_);
+    s.io(piDram_); s.io(piCart_); s.io(piStatus_); s.io(piBsd_); s.io(piBusy_);
+    s.io(siDram_); s.io(siBusy_); s.io(joybusArmed_);
+    for (auto& p : pads_) { s.io(p.buttons); s.io(p.x); s.io(p.y); s.io(p.present); }
+    s.io(ri_);
+    s.io(spMemAddr_); s.io(spDramAddr_); s.io(spMemCur_); s.io(spDramCur_); s.io(spLen_);
+    s.io(spStatus_); s.io(spSemaphore_); s.io(rspDebt_);
+    s.io(dpStart_); s.io(dpEnd_); s.io(dpCurrent_); s.io(dpStatus_);
+    s.io(isvBuf_);
+    cpu.serialize(s);
+    rsp.serialize(s);
+    rdp.serialize(s);
+    if (S::reading) updateIrq();
+}
+
+template void N64System::serialize<StateWriter>(StateWriter&);
+template void N64System::serialize<StateReader>(StateReader&);
 
 // ─── PIF: команды, джойбас, CIC ───────────────────────────────────────────────
 void N64System::pifCommand()

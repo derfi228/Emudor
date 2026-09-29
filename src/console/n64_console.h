@@ -35,8 +35,13 @@ public:
     bool saveSram(const std::string& path) const override;
     bool loadSram(const std::string& path)       override;
 
+    bool saveState(std::ostream& os) const override;
+    bool loadState(std::istream& is)       override;
+
     N64System& system() { return sys_; }
 
 private:
     N64System sys_;
+
+    template<class S> void serialize(S& s);
 };

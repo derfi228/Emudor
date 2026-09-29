@@ -1,9 +1,11 @@
 #include <gtest/gtest.h>
+#include "console/n64_console.h"
 #include "n64/n64_system.h"
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <sstream>
 #include <vector>
 
 // ─── Синтетический картридж: код лежит на месте IPL3 (ПЗУ 0x40) ───────────────
@@ -426,4 +428,55 @@ TEST(N64Rdp, TextureRectangleSamplesLoadedTile)
         for (int x = 0; x < 4; ++x)
             EXPECT_EQ(pixel16(g, 0x100000, 64, x, y), tex[(x + y) & 3]) << x << "," << y;
     EXPECT_EQ(pixel16(g, 0x100000, 64, 4, 0), 0x0000);
+}
+
+// ─── Save state ───────────────────────────────────────────────────────────────
+namespace {
+
+// Картридж: бесконечный счётчик в RDRAM 0x100000.
+std::vector<uint8_t> counterRom(uint32_t salt)
+{
+    Asm a;
+    a.li(S0, OUT);
+    a.li(T0, salt);
+    a.sw(T0, 0, S0);                         // 0: salt
+    a.i(0x09, T0, T0, 1);                    // addiu t0,t0,1
+    a.sw(T0, 0, S0);
+    a.i(0x04, 0, 0, (uint16_t)-3);           // beq r0,r0,-3
+    a.nop();
+    std::vector<uint8_t> rom(0x101000, 0);
+    N64System::put32(&rom[0], 0x80371240);
+    for (size_t k = 0; k < a.w.size(); ++k) N64System::put32(&rom[0x40 + k * 4], a.w[k]);
+    return rom;
+}
+
+} // namespace
+
+TEST(N64State, SaveLoadContinuesExactly)
+{
+    auto con = std::make_unique<N64Console>();
+    ASSERT_TRUE(con->loadROMData(counterRom(0)));
+    for (int f = 0; f < 2; ++f) con->runFrame();
+    std::stringstream st;
+    ASSERT_TRUE(con->saveState(st));
+    for (int f = 0; f < 3; ++f) con->runFrame();
+    const uint32_t expected = N64System::get32(con->system().rdram() + 0x100000);
+    ASSERT_TRUE(con->loadState(st));
+    for (int f = 0; f < 3; ++f) con->runFrame();
+    EXPECT_EQ(N64System::get32(con->system().rdram() + 0x100000), expected);
+}
+
+TEST(N64State, RejectsStateOfAnotherGame)
+{
+    auto a = std::make_unique<N64Console>();
+    auto b = std::make_unique<N64Console>();
+    ASSERT_TRUE(a->loadROMData(counterRom(0)));
+    ASSERT_TRUE(b->loadROMData(counterRom(12345)));
+    a->runFrame();
+    b->runFrame();
+    std::stringstream st;
+    ASSERT_TRUE(a->saveState(st));
+    const uint32_t before = N64System::get32(b->system().rdram() + 0x100000);
+    EXPECT_FALSE(b->loadState(st));
+    EXPECT_EQ(N64System::get32(b->system().rdram() + 0x100000), before);
 }

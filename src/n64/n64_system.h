@@ -109,6 +109,10 @@ public:
     std::vector<uint8_t> saveData() const;
     bool loadSaveData(const std::vector<uint8_t>& data);
 
+    // ── Save state: всё состояние машины (RDRAM, процессоры, регистры) ───────
+    template<class S> void serialize(S& s);
+    uint32_t romHash() const { return romHash_; }
+
     // ── Диагностика ──────────────────────────────────────────────────────────
     uint64_t frameCount() const { return frames_; }
     const std::string& isViewerLog() const { return isvLog_; }   // вывод отладочного порта IS-Viewer
@@ -132,6 +136,7 @@ private:
     bool saveDirty_ = false;
 
     std::string title_, gameCode_;
+    uint32_t romHash_ = 0;
     Tv   tv_ = Tv::NTSC;
     Cic  cic_ = Cic::X102;
     Save save_ = Save::None;
