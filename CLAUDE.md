@@ -139,7 +139,7 @@ cmake -B build/release -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build buil
 - **N64System** (`n64_system.cpp`): память big-endian, расписание событий (строка VI, DMA
   PI/SI, буфер AI). Загрузка: IPL3 → DMEM, RI_SELECT≠0 (IPL3 пропускает настройку RDRAM),
   osMemSize — сами. CIC — по CRC32 IPL3, ТВ-стандарт — по региону, тип сохранения — по коду игры
-- **N64Console**: раскладка SNES, крестовина → стик, стрелки → C-кнопки
+- **N64Console**: раскладка SNES, крестовина → стик, стрелки → C-кнопки, L → Z, Select → шаг (стик на треть)
 - Диагностика: `EMUDOR_N64_TRACE=1` (состояние раз в кадр), `EMUDOR_N64_ISV=1` (вывод IS-Viewer),
   `EMUDOR_N64_EXC=1` (исключения CPU, кроме прерываний)
 - **Save states**: «N64S» v1, ~8.7 МБ (почти всё — RDRAM); загрузка продолжает байт-в-байт

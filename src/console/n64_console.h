@@ -21,7 +21,8 @@ public:
     int getFrameHeight() const override { return sys_.frameHeight(); }
 
     // Раскладка SNES (B|Y|Sel|Sta|Up|Dn|L|R|A|X|LSh|RSh) плюс биты 3-0 — C-кнопки
-    // (вверх, вниз, влево, вправо). Крестовина SNES — аналоговый стик.
+    // (вверх, вниз, влево, вправо). Крестовина SNES — аналоговый стик, Select —
+    // «шаг» (стик на треть), L — Z, Y — L, X — C-вверх.
     void setInput(int player, uint16_t buttons) override;
 
     const std::vector<float>& getAudioSamples() const override { return sys_.samples(); }

@@ -29,17 +29,19 @@ void N64Console::setInput(int player, uint16_t b)
     if (b & (1u << 7))  n |= 0x8000;               // A
     if (b & (1u << 15)) n |= 0x4000;               // B
     if (b & (1u << 5))  n |= 0x2000;               // L → Z
-    if (b & (1u << 13)) n |= 0x2000;               // Select → Z
     if (b & (1u << 12)) n |= 0x1000;               // Start
     if (b & (1u << 14)) n |= 0x0020;               // Y → L
     if (b & (1u << 4))  n |= 0x0010;               // R
     if (b & (1u << 6))  n |= 0x0008;               // X → C-вверх
     n |= b & 0x000F;                               // C-кнопки
+    // Стик: полный наклон ±80; с Select (у N64 такой кнопки нет) — треть,
+    // чтобы с клавиатуры можно было идти шагом, а не только бежать.
+    const int8_t full = (b & (1u << 13)) ? 27 : 80;
     int8_t x = 0, y = 0;
-    if (b & (1u << 11)) y = 80;
-    if (b & (1u << 10)) y = -80;
-    if (b & (1u << 9))  x = -80;
-    if (b & (1u << 8))  x = 80;
+    if (b & (1u << 11)) y = full;
+    if (b & (1u << 10)) y = (int8_t)-full;
+    if (b & (1u << 9))  x = (int8_t)-full;
+    if (b & (1u << 8))  x = full;
     sys_.setController(player, n, x, y);
 }
 
