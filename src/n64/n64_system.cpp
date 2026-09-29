@@ -35,6 +35,8 @@ N64System::N64System()
     : rdram_(RDRAM_SIZE), frame_(320 * 240, 0xFF000000u)
 {
     cpu.connect(this);
+    rsp.connect(this, spMem_.data());
+    rdp.connect(this, rdram_.data(), RDRAM_SIZE, spMem_.data());
     eventAt_.fill(NEVER);
 }
 
@@ -132,15 +134,18 @@ void N64System::reset()
     siDram_ = 0;
     joybusArmed_ = false;
     ri_.fill(0);
-    spMemAddr_ = spDramAddr_ = spRdLen_ = spWrLen_ = 0;
+    spMemAddr_ = spDramAddr_ = spMemCur_ = spDramCur_ = spLen_ = 0;
     spStatus_ = 1;
-    spSemaphore_ = spPc_ = 0;
+    spSemaphore_ = 0;
+    rspDebt_ = 0;
     dpStart_ = dpEnd_ = dpCurrent_ = 0;
     dpStatus_ = 0x80;
     samples_.clear();
     pads_[0].present = true;
 
     cpu.reset();
+    rsp.reset();
+    rdp.reset();
     updateIrq();
     bootHle();
     schedule(EV_VI_LINE, viCyclesPerLine());
@@ -227,8 +232,17 @@ void N64System::runFrame()
 {
     frameDone_ = false;
     while (!frameDone_) {
-        const uint64_t next = *std::min_element(eventAt_.begin(), eventAt_.end());
-        if (cpu.cycles() < next) cpu.runUntil(next);
+        // Пока RSP работает, процессоры идут по очереди короткими отрезками.
+        const uint64_t start = cpu.cycles();
+        const bool rspOn = !spHalted();
+        uint64_t next = *std::min_element(eventAt_.begin(), eventAt_.end());
+        if (rspOn) next = std::min(next, start + RSP_SLICE);
+        if (start < next) cpu.runUntil(next);
+        if (rspOn) {
+            rspDebt_ += (cpu.cycles() - start) * 2;          // RSP: 62.5 МГц = 2/3 частоты CPU
+            rsp.run((uint32_t)(rspDebt_ / 3));
+            rspDebt_ %= 3;
+        }
         const uint64_t now = cpu.cycles();
         for (int e = 0; e < EV_COUNT; ++e) {
             if (eventAt_[e] <= now) {
@@ -281,26 +295,10 @@ uint32_t N64System::readIo(uint32_t pa)
     if (pa < 0x04000000) return 0;                                   // регистры RDRAM
     if (pa < 0x04040000) return get32(&spMem_[pa & 0x1FFC]);         // DMEM / IMEM
     if (pa < 0x04100000) {                                           // SP
-        if (pa >= 0x04080000) return (pa & 4) ? 0 : spPc_;
-        switch (pa & 0x1C) {
-        case 0x00: return spMemAddr_;
-        case 0x04: return spDramAddr_;
-        case 0x08: return spRdLen_;
-        case 0x0C: return spWrLen_;
-        case 0x10: return spStatus_;
-        case 0x1C: { const uint32_t v = spSemaphore_; spSemaphore_ = 1; return v; }
-        default:   return 0;                                         // DMA_FULL, DMA_BUSY
-        }
+        if (pa >= 0x04080000) return (pa & 4) ? 0 : rsp.pc;
+        return spRegRead((pa >> 2) & 7);
     }
-    if (pa < 0x04200000) {                                           // DP (команды)
-        switch (pa & 0x1C) {
-        case 0x00: return dpStart_;
-        case 0x04: return dpEnd_;
-        case 0x08: return dpCurrent_;
-        case 0x0C: return dpStatus_;
-        default:   return 0;
-        }
-    }
+    if (pa < 0x04200000) return spRegRead(8 + ((pa >> 2) & 7));      // DP (команды)
     if (pa < 0x04300000) return 0;                                   // DP (span)
     if (pa < 0x04400000) {                                           // MI
         switch (pa & 0xC) {
@@ -366,37 +364,11 @@ void N64System::writeIo(uint32_t pa, uint32_t v, uint32_t mask)
     if (pa < 0x04000000) return;
     if (pa < 0x04040000) { merge(&spMem_[pa & 0x1FFC]); return; }
     if (pa < 0x04100000) {                                           // SP
-        if (pa >= 0x04080000) { if (!(pa & 4)) spPc_ = v & 0xFFC; return; }
-        switch (pa & 0x1C) {
-        case 0x00: spMemAddr_ = v & 0x1FF8; break;
-        case 0x04: spDramAddr_ = v & 0xFFFFF8; break;
-        case 0x08: spRdLen_ = v; spDma(false, v); break;
-        case 0x0C: spWrLen_ = v; spDma(true, v); break;
-        case 0x10: spStatusWrite(v); break;
-        case 0x1C: spSemaphore_ = 0; break;
-        default: break;
-        }
+        if (pa >= 0x04080000) { if (!(pa & 4)) rsp.setPc(v); return; }
+        spRegWrite((pa >> 2) & 7, v);
         return;
     }
-    if (pa < 0x04200000) {                                           // DP
-        switch (pa & 0x1C) {
-        case 0x00: dpStart_ = dpCurrent_ = v & 0xFFFFF8; break;
-        // ponytail: RDP ещё нет — список команд «выполняется» мгновенно и без рисования
-        case 0x04: dpEnd_ = v & 0xFFFFF8; dpCurrent_ = dpEnd_; break;
-        case 0x0C: {
-            auto pair = [&](int clr, int set, uint32_t flag) {
-                if ((v >> clr & 1) && !(v >> set & 1)) dpStatus_ &= ~flag;
-                if ((v >> set & 1) && !(v >> clr & 1)) dpStatus_ |= flag;
-            };
-            pair(0, 1, 0x1);                                         // XBUS (команды из DMEM)
-            pair(2, 3, 0x2);                                         // freeze
-            pair(4, 5, 0x4);                                         // flush
-            break;
-        }
-        default: break;
-        }
-        return;
-    }
+    if (pa < 0x04200000) { spRegWrite(8 + ((pa >> 2) & 7), v); return; }   // DP
     if (pa < 0x04300000) return;
     if (pa < 0x04400000) {                                           // MI
         if ((pa & 0xC) == 0x0) {
@@ -527,13 +499,70 @@ void N64System::spDma(bool toRdram, uint32_t reg)
         mem  = (mem & 0x1000) | ((mem + len + 1) & 0xFFF);
         dram = (dram + len + 1 + skip) & 0xFFFFF8;
     }
-    spMemAddr_ = mem;
-    spDramAddr_ = dram;
-    (toRdram ? spWrLen_ : spRdLen_) = (skip << 20) | 0xFF8;
+    spMemCur_ = mem;
+    spDramCur_ = dram;
+    spLen_ = (skip << 20) | 0xFF8;                                   // длина «ушла» за ноль
+}
+
+uint32_t N64System::spRegRead(int reg)
+{
+    switch (reg & 15) {
+    case 0:  return spMemCur_;
+    case 1:  return spDramCur_;
+    case 2:
+    case 3:  return spLen_;
+    case 4:  return spStatus_;
+    case 7:  { const uint32_t v = spSemaphore_; spSemaphore_ = 1; return v; }
+    case 8:  return dpStart_;
+    case 9:  return dpEnd_;
+    case 10: return dpCurrent_;
+    case 11: return dpStatus_;
+    default: return 0;                                               // DMA_FULL/BUSY, счётчики DP
+    }
+}
+
+void N64System::spRegWrite(int reg, uint32_t v)
+{
+    switch (reg & 15) {
+    case 0: spMemAddr_ = spMemCur_ = v & 0x1FF8; break;
+    case 1: spDramAddr_ = spDramCur_ = v & 0xFFFFF8; break;
+    case 2: spLen_ = v; spDma(false, v); break;
+    case 3: spLen_ = v; spDma(true, v); break;
+    case 4: spStatusWrite(v); break;
+    case 7: spSemaphore_ = 0; break;
+    case 8: dpStart_ = dpCurrent_ = v & 0xFFFFF8; break;             // RDP всегда свободен — старт сразу
+    case 9:                                                          // конец списка → RDP рисует
+        // Конец не дальше текущей позиции — RDP ничего не делает (так пишет,
+        // например, микрокод звука при старте задачи).
+        dpEnd_ = v & 0xFFFFF8;
+        if (dpEnd_ > dpCurrent_) {
+            rdp.process(dpCurrent_, dpEnd_, dpStatus_ & 1);
+            dpCurrent_ = dpEnd_;
+        }
+        break;
+    case 11: {
+        auto pair = [&](int clr, int set, uint32_t flag) {
+            if ((v >> clr & 1) && !(v >> set & 1)) dpStatus_ &= ~flag;
+            if ((v >> set & 1) && !(v >> clr & 1)) dpStatus_ |= flag;
+        };
+        pair(0, 1, 0x1);                                             // XBUS (команды из DMEM)
+        pair(2, 3, 0x2);                                             // freeze
+        pair(4, 5, 0x4);                                             // flush
+        break;
+    }
+    default: break;
+    }
+}
+
+void N64System::rspBreak()
+{
+    spStatus_ |= 0x3;                                                // halt + broke
+    if (spStatus_ & 0x40) raiseMi(MI_SP);
 }
 
 void N64System::spStatusWrite(uint32_t v)
 {
+    const bool wasHalted = spHalted();
     auto pair = [&](int clr, int set, uint32_t flag) {
         if ((v >> clr & 1) && !(v >> set & 1)) spStatus_ &= ~flag;
         if ((v >> set & 1) && !(v >> clr & 1)) spStatus_ |= flag;
@@ -545,6 +574,7 @@ void N64System::spStatusWrite(uint32_t v)
     pair(5, 6, 0x020);                                               // single step
     pair(7, 8, 0x040);                                               // прерывание по BREAK
     for (int i = 0; i < 8; ++i) pair(9 + 2 * i, 10 + 2 * i, 0x80u << i);   // сигналы 0-7
+    if (wasHalted && !spHalted()) cpu.stopAt(cpu.cycles());          // RSP запущен — отдать ему время
 }
 
 // ─── PI: DMA картриджа ────────────────────────────────────────────────────────

@@ -3,6 +3,8 @@
 #include "n64_system.h"
 #include "console/state_io.h"
 #include <cfenv>
+#include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -136,6 +138,14 @@ void Vr4300::step()
 // ─── Исключения ───────────────────────────────────────────────────────────────
 void Vr4300::raise(Exc code, uint32_t copNum, bool tlbRefill)
 {
+    // Диагностика: исключения, кроме прерываний (EMUDOR_N64_EXC=1)
+    static const bool s_log = std::getenv("EMUDOR_N64_EXC") != nullptr;
+    if (s_log && code != EXC_INT) {
+        uint32_t word = 0;
+        if (((uint32_t)curPc_ & 0xC0000000u) == 0x80000000u) word = sys_->read32((uint32_t)curPc_ & 0x1FFFFFFF);
+        std::fprintf(stderr, "N64 exc=%u pc=%08X instr=%08X bd=%d badv=%08X ra=%08X\n", (unsigned)code,
+                     (uint32_t)curPc_, word, (int)inDelaySlot_, (uint32_t)cop0[C0_BADVADDR], (uint32_t)gpr[31]);
+    }
     uint64_t& status = cop0[C0_STATUS];
     uint64_t& cause  = cop0[C0_CAUSE];
     const bool exl = status & ST_EXL;

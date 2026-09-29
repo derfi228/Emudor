@@ -1,5 +1,7 @@
 #pragma once
 #include "n64_cpu.h"
+#include "n64_rsp.h"
+#include "n64_rdp.h"
 #include <array>
 #include <cstdint>
 #include <cstring>
@@ -40,6 +42,14 @@ public:
     void runFrame();                  // одно поле VI (1/60 или 1/50 секунды)
 
     Vr4300 cpu;
+    Rsp    rsp;
+    Rdp    rdp;
+
+    // ── Регистры SP (0-7) и DP (8-15): для CPU по адресам, для RSP через COP0 ──
+    uint32_t spRegRead(int reg);
+    void     spRegWrite(int reg, uint32_t v);
+    bool     spHalted() const { return spStatus_ & 1; }
+    void     rspBreak();                          // BREAK: стоп и, если просили, прерывание
 
     // ── Картридж ─────────────────────────────────────────────────────────────
     const std::string& title() const { return title_; }
@@ -184,9 +194,13 @@ private:
 
     // ── RI, SP, DP (пока — регистры и DMA) ───────────────────────────────────
     std::array<uint32_t, 8> ri_{};
-    uint32_t spMemAddr_ = 0, spDramAddr_ = 0, spRdLen_ = 0, spWrLen_ = 0;
+    // Адреса DMA: записанные программой (с них стартует каждый DMA) и текущие
+    // (их отдаёт чтение). RD_LEN и WR_LEN читаются как один регистр.
+    uint32_t spMemAddr_ = 0, spDramAddr_ = 0, spMemCur_ = 0, spDramCur_ = 0, spLen_ = 0;
     uint32_t spStatus_ = 1;           // остановлен
-    uint32_t spSemaphore_ = 0, spPc_ = 0;
+    uint32_t spSemaphore_ = 0;
+    uint64_t rspDebt_ = 0;            // трети такта RSP, ещё не отданные ему
+    static constexpr uint64_t RSP_SLICE = 600;   // тактов CPU между переключениями
     void     spDma(bool toRdram, uint32_t reg);
     void     spStatusWrite(uint32_t v);
     uint32_t dpStart_ = 0, dpEnd_ = 0, dpCurrent_ = 0, dpStatus_ = 0x80;

@@ -254,6 +254,12 @@ uint16_t buttonMaskOf(const std::string& nameUpper, bool isSnes)
         if (nameUpper=="X")      return 1u<<6;
         if (nameUpper=="L")      return 1u<<5;
         if (nameUpper=="R")      return 1u<<4;
+        // N64: Z (как L) и C-кнопки в младших битах
+        if (nameUpper=="Z")      return 1u<<5;
+        if (nameUpper=="CUP")    return 1u<<3;
+        if (nameUpper=="CDOWN")  return 1u<<2;
+        if (nameUpper=="CLEFT")  return 1u<<1;
+        if (nameUpper=="CRIGHT") return 1u<<0;
     } else {
         if (nameUpper=="A")      return 1u<<7;
         if (nameUpper=="B")      return 1u<<6;
@@ -436,7 +442,7 @@ int runHeadless(const CliArgs& args)
     }
 
     // ── Input-script (опционально, debug) ────────────────────────────────────
-    const bool isSnes = (con->getConsoleName() == "SNES");
+    const bool isSnes = (con->getConsoleName() == "SNES" || con->getConsoleName() == "N64");
     std::vector<InputEvent> events;
     if (!args.inputScriptPath.empty())
         events = loadInputScript(args.inputScriptPath, isSnes);

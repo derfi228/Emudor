@@ -266,3 +266,164 @@ TEST(N64System, ViShows16BitFramebuffer)
     EXPECT_EQ(g.sys->frame()[1], 0xFFFF0000u);
     EXPECT_EQ(g.sys->frame()[2], 0xFF000000u);
 }
+
+// ─── RSP ──────────────────────────────────────────────────────────────────────
+// Программа в IMEM: два вектора из DMEM → VADD и VMULF → обратно в DMEM, BREAK.
+TEST(N64Rsp, VectorAddMultiplyAndBreak)
+{
+    Rig g;
+    g.a.halt();
+    g.boot();
+    uint8_t* dmem = g.sys->spMem();
+    const int16_t a[8] = { 100, -200, 32767, -32768, 0x4000, 0x4000, 1, 0 };
+    const int16_t b[8] = { 50, 50, 1, -1, 0x4000, -0x4000, 0, 0 };
+    for (int n = 0; n < 8; ++n) {
+        dmem[n * 2] = (uint8_t)(a[n] >> 8); dmem[n * 2 + 1] = (uint8_t)a[n];
+        dmem[16 + n * 2] = (uint8_t)(b[n] >> 8); dmem[16 + n * 2 + 1] = (uint8_t)b[n];
+    }
+    const uint32_t prog[] = {
+        0xC8012000,          // lqv  $v1, 0x00($0)
+        0xC8022001,          // lqv  $v2, 0x10($0)
+        0x4A0208D0,          // vadd $v3, $v1, $v2
+        0x4A020900,          // vmulf $v4, $v1, $v2
+        0xE8032002,          // sqv  $v3, 0x20($0)
+        0xE8042003,          // sqv  $v4, 0x30($0)
+        0x0000000D,          // break
+        0x00000000,
+    };
+    for (int k = 0; k < 8; ++k) N64System::put32(dmem + 0x1000 + k * 4, prog[k]);
+    g.sys->write32(0x04300000 + 0x0C, 0x2);                    // MI: разрешить прерывание SP
+    g.sys->write32(0x04080000, 0);                             // SP_PC
+    g.sys->write32(0x04040010, 0x1 | 0x100);                   // пуск + прерывание по BREAK
+    g.run();
+    auto lane = [&](uint32_t off, int n) { return (int16_t)(dmem[off + n * 2] << 8 | dmem[off + n * 2 + 1]); };
+    const int16_t add[8] = { 150, -150, 32767, -32768, 32767, 0, 1, 0 };
+    const int16_t mul[8] = { 0, 0, 1, 1, 0x2000, -0x2000, 0, 0 };
+    for (int n = 0; n < 8; ++n) {
+        EXPECT_EQ(lane(0x20, n), add[n]) << "vadd " << n;
+        EXPECT_EQ(lane(0x30, n), mul[n]) << "vmulf " << n;
+    }
+    EXPECT_TRUE(g.sys->spHalted());
+    EXPECT_EQ(g.sys->read32(0x04040010) & 0x3, 0x3u);          // halt + broke
+    EXPECT_EQ(g.sys->read32(0x04300008) & N64System::MI_SP, N64System::MI_SP);
+}
+
+// ─── RDP ──────────────────────────────────────────────────────────────────────
+namespace {
+
+struct DisplayList {
+    std::vector<uint64_t> w;
+    void cmd(uint64_t v) { w.push_back(v); }
+    void colorImage(uint32_t addr, uint32_t width) { cmd(0x3Full << 56 | 2ull << 51 | (uint64_t)(width - 1) << 32 | addr); }
+    void scissor(uint32_t xl, uint32_t yl) { cmd(0x2Dull << 56 | (uint64_t)(xl << 2) << 12 | (yl << 2)); }
+    void otherModes(uint64_t m) { cmd(0x2Full << 56 | m); }
+    void rect(uint32_t cmdId, uint32_t x0, uint32_t y0, uint32_t x1, uint32_t y1, int tile = 0)
+    {
+        cmd((uint64_t)cmdId << 56 | (uint64_t)(x1 << 2) << 44 | (uint64_t)(y1 << 2) << 32 | (uint64_t)tile << 24 |
+            (uint64_t)(x0 << 2) << 12 | (y0 << 2));
+    }
+    // Комбайнер: оба такта одинаковы, результат — вход D (addRgb/addAlpha)
+    void combineAdd(uint32_t addRgb, uint32_t addAlpha)
+    {
+        uint64_t m = 0x3Cull << 56;
+        m |= 15ull << 52 | 31ull << 47 | 7ull << 44 | 7ull << 41 | 15ull << 37 | 31ull << 32;
+        m |= 15ull << 28 | 15ull << 24 | 7ull << 21 | 7ull << 18 | 7ull << 12 | 7ull << 3;
+        m |= (uint64_t)addRgb << 15 | (uint64_t)addAlpha << 9 | (uint64_t)addRgb << 6 | addAlpha;
+        cmd(m);
+    }
+    void syncFull() { cmd(0x29ull << 56); }
+};
+
+// Список в RDRAM по 0x200000 и запуск RDP записью DPC_START/DPC_END.
+void runList(Rig& g, const DisplayList& dl)
+{
+    for (size_t k = 0; k < dl.w.size(); ++k) {
+        N64System::put32(g.sys->rdram() + 0x200000 + k * 8, (uint32_t)(dl.w[k] >> 32));
+        N64System::put32(g.sys->rdram() + 0x200000 + k * 8 + 4, (uint32_t)dl.w[k]);
+    }
+    g.sys->write32(0x04100000, 0x200000);
+    g.sys->write32(0x04100004, 0x200000 + (uint32_t)dl.w.size() * 8);
+}
+
+uint16_t pixel16(Rig& g, uint32_t base, uint32_t width, int x, int y)
+{
+    const uint8_t* p = g.sys->rdram() + base + ((uint32_t)y * width + (uint32_t)x) * 2;
+    return (uint16_t)(p[0] << 8 | p[1]);
+}
+
+} // namespace
+
+// Режим заливки: прямоугольник включает правый и нижний край.
+TEST(N64Rdp, FillRectangleAndSyncFullInterrupt)
+{
+    Rig g;
+    g.a.halt();
+    g.boot();
+    DisplayList dl;
+    dl.colorImage(0x100000, 64);
+    dl.scissor(64, 64);
+    dl.otherModes(3ull << 52);                                  // заливка
+    dl.cmd(0x37ull << 56 | 0xF801F801u);                        // красный
+    dl.rect(0x36, 0, 0, 15, 7);
+    dl.syncFull();
+    runList(g, dl);
+    EXPECT_EQ(pixel16(g, 0x100000, 64, 0, 0), 0xF801);
+    EXPECT_EQ(pixel16(g, 0x100000, 64, 15, 7), 0xF801);
+    EXPECT_EQ(pixel16(g, 0x100000, 64, 16, 0), 0x0000);
+    EXPECT_EQ(pixel16(g, 0x100000, 64, 0, 8), 0x0000);
+    EXPECT_EQ(g.sys->read32(0x04300008) & N64System::MI_DP, N64System::MI_DP);
+}
+
+// Плоский треугольник цвета prim: вершины (0,0), (32,0), (0,32); главное ребро слева.
+TEST(N64Rdp, FlatTriangleUsesPrimColor)
+{
+    Rig g;
+    g.a.halt();
+    g.boot();
+    DisplayList dl;
+    dl.colorImage(0x100000, 64);
+    dl.scissor(64, 64);
+    dl.otherModes(0);                                           // 1 такт, без Z и смешивания
+    dl.combineAdd(3, 3);                                        // цвет = prim
+    dl.cmd(0x3Aull << 56 | 0x00FF00FFu);                        // prim: зелёный
+    dl.cmd(0x08ull << 56 | 1ull << 55 | (uint64_t)(32 << 2) << 32);
+    dl.cmd((uint64_t)(32u << 16) << 32 | 0xFFFF0000u);          // XL=32, dXL/dy=−1
+    dl.cmd(0);                                                  // XH=0, dXH/dy=0
+    dl.cmd((uint64_t)(32u << 16) << 32);                        // XM=32
+    dl.syncFull();
+    runList(g, dl);
+    EXPECT_EQ(pixel16(g, 0x100000, 64, 5, 5), 0x07C1);
+    EXPECT_EQ(pixel16(g, 0x100000, 64, 30, 0), 0x07C1);
+    EXPECT_EQ(pixel16(g, 0x100000, 64, 20, 20), 0x0000);
+    EXPECT_EQ(pixel16(g, 0x100000, 64, 31, 1), 0x0000);
+}
+
+// Текстура 4×4 RGBA16 через Load Tile и текстурный прямоугольник 1:1.
+TEST(N64Rdp, TextureRectangleSamplesLoadedTile)
+{
+    Rig g;
+    g.a.halt();
+    g.boot();
+    const uint16_t tex[4] = { 0xF801, 0x07C1, 0x003F, 0xFFFF };
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x) {
+            uint8_t* p = g.sys->rdram() + 0x120000 + (y * 4 + x) * 2;
+            p[0] = (uint8_t)(tex[(x + y) & 3] >> 8); p[1] = (uint8_t)tex[(x + y) & 3];
+        }
+    DisplayList dl;
+    dl.colorImage(0x100000, 64);
+    dl.scissor(64, 64);
+    dl.otherModes(0);
+    dl.combineAdd(1, 1);                                        // цвет = texel0
+    dl.cmd(0x3Dull << 56 | 2ull << 51 | 3ull << 32 | 0x120000); // текстура RGBA16, ширина 4
+    dl.cmd(0x35ull << 56 | 2ull << 51 | 1ull << 41);            // тайл 0: RGBA16, строка 1 слово
+    dl.cmd(0x34ull << 56 | (3u << 2) << 12 | (3u << 2));        // Load Tile (0,0)-(3,3): угол (0,0) — в старших полях
+    dl.rect(0x24, 0, 0, 4, 4);                                  // Texture Rectangle
+    dl.cmd((uint64_t)(1u << 10) << 16 | (1u << 10));            // S=T=0, dS/dx=dT/dy=1
+    dl.syncFull();
+    runList(g, dl);
+    for (int y = 0; y < 4; ++y)
+        for (int x = 0; x < 4; ++x)
+            EXPECT_EQ(pixel16(g, 0x100000, 64, x, y), tex[(x + y) & 3]) << x << "," << y;
+    EXPECT_EQ(pixel16(g, 0x100000, 64, 4, 0), 0x0000);
+}

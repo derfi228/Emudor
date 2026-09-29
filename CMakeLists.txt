@@ -84,6 +84,8 @@ add_library(nes_core STATIC
     src/console/n64_console.cpp
     src/n64/n64_cpu.cpp
     src/n64/n64_system.cpp
+    src/n64/n64_rsp.cpp
+    src/n64/n64_rdp.cpp
 )
 target_include_directories(nes_core PUBLIC src)
 target_compile_features(nes_core PUBLIC cxx_std_17)
