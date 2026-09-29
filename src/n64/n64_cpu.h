@@ -64,6 +64,8 @@ private:
     uint64_t randomBase_ = 0;         // команда, с которой Random считает от 31
     uint64_t cop0Latch_ = 0;          // последнее записанное в COP0 (читается из пустых регистров)
     uint64_t cop2Latch_ = 0;          // «регистр» отсутствующего COP2
+    bool     idleLoop_ = false;       // только что выполнен «b .» — можно промотать время
+    void     skipIdle();
 
     struct TlbEntry {
         uint64_t entryHi = 0;         // VPN2 и ASID (биты под маской страницы сброшены)

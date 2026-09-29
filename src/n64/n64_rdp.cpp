@@ -370,48 +370,74 @@ void Rdp::triangle(uint32_t cmd)
         if (minX >= maxX) continue;
         const int x0 = std::max<int64_t>(minX >> 16, clipX0);
         const int x1 = std::min<int64_t>((maxX - 1) >> 16, clipX1 - 1);
+        if (x0 > x1) continue;
 
+        // Внутренние пиксели (все точки покрыты) — без поточечной проверки
+        int64_t maxL = std::numeric_limits<int64_t>::min(), minR = std::numeric_limits<int64_t>::max();
+        int fullCvg = 0;
+        for (int i = 0; i < 4; ++i) {
+            if (!valid[i]) continue;
+            maxL = std::max(maxL, lx[i]);
+            minR = std::min(minR, rx[i]);
+            fullCvg += 2;
+        }
+        const int64_t in0 = (maxL + 0xFFFF) >> 16;                   // первый x с lx ≤ x
+        const int64_t in1 = (minR - 0xC001) >> 16;                   // последний x с x+¾ < rx
+
+        // Атрибуты в пикселе x0, дальше — приращениями d/dx
         const int32_t rows = row - (ystart >> 2);
         const int64_t xhRow = (int64_t)xh + (int64_t)dxh * rows;    // главное ребро на этой строке
-        for (int x = x0; x <= x1; ++x) {
-            // Покрытие: по 2 точки на подстроку (смещения 0 и ½ или ¼ и ¾)
-            int cvg = 0;
-            bool cvbit = false;
-            const int64_t px16 = (int64_t)x << 16;
-            for (int i = 0; i < 4; ++i) {
-                if (!valid[i]) continue;
-                const int64_t s0 = px16 + ((i & 1) ? 0x4000 : 0), s1 = s0 + 0x8000;
-                if (s0 >= lx[i] && s0 < rx[i]) { ++cvg; if (i == 0) cvbit = true; }
-                if (s1 >= lx[i] && s1 < rx[i]) ++cvg;
-            }
-            if (!cvg) continue;
-            if (m_.cycle == 3) { if (cvbit) fillPixel(x, row); continue; }
+        const int64_t dx0 = ((int64_t)x0 << 16) - xhRow;
+        int64_t val[8];
+        for (int n = 0; n < 8; ++n)
+            val[n] = attr[n][0] + (int64_t)attr[n][2] * rows + (((int64_t)attr[n][1] * dx0) >> 16);
 
-            const int64_t dx = px16 - xhRow;
-            auto at = [&](int n) -> int32_t {
-                return (int32_t)(attr[n][0] + (int64_t)attr[n][2] * rows + (((int64_t)attr[n][1] * dx) >> 16));
-            };
-            Pixel p;
-            for (int c = 0; c < 4; ++c) p.shade[c] = shade ? clamp9(at(c) >> 16) : 0;
-            p.s = p.t = 0;
-            if (tex) {
-                const int32_t s = at(4), t = at(5);
-                if (m_.persp) {
-                    const int64_t w = std::max<int32_t>(at(6), 1);
-                    p.s = (int32_t)std::clamp<int64_t>(((int64_t)s << 15) / w, -32768, 32767);
-                    p.t = (int32_t)std::clamp<int64_t>(((int64_t)t << 15) / w, -32768, 32767);
-                } else {
-                    p.s = s >> 16;
-                    p.t = t >> 16;
+        for (int x = x0; x <= x1; ++x) {
+            int cvg;
+            bool cvbit;
+            if (x >= in0 && x <= in1) {
+                cvg = fullCvg;
+                cvbit = valid[0];
+            } else {
+                // Покрытие: по 2 точки на подстроку (смещения 0 и ½ или ¼ и ¾)
+                cvg = 0;
+                cvbit = false;
+                const int64_t px16 = (int64_t)x << 16;
+                for (int i = 0; i < 4; ++i) {
+                    if (!valid[i]) continue;
+                    const int64_t s0 = px16 + ((i & 1) ? 0x4000 : 0), s1 = s0 + 0x8000;
+                    if (s0 >= lx[i] && s0 < rx[i]) { ++cvg; if (i == 0) cvbit = true; }
+                    if (s1 >= lx[i] && s1 < rx[i]) ++cvg;
                 }
             }
-            if (m_.zPrim)  p.z = (primZ_ & 0x7FFF) << 3;
-            else if (zbuf) p.z = std::clamp(at(7) >> 13, 0, 0x3FFFF);
-            else           p.z = 0;
-            p.dz = dzPix;
-            p.cvg = cvg;
-            p.cvbit = cvbit;
-            drawPixel(x, row, p, tile, tex);
+            if (cvg && (m_.cycle == 3 ? cvbit : true)) {
+                if (m_.cycle == 3) {
+                    fillPixel(x, row);
+                } else {
+                    Pixel p;
+                    for (int c = 0; c < 4; ++c) p.shade[c] = shade ? clamp9((int32_t)(val[c] >> 16)) : 0;
+                    p.s = p.t = 0;
+                    if (tex) {
+                        const int32_t s = (int32_t)val[4], t = (int32_t)val[5];
+                        if (m_.persp) {
+                            const double inv = 32768.0 / (double)std::max<int32_t>((int32_t)val[6], 1);
+                            p.s = (int32_t)std::clamp<double>(s * inv, -32768.0, 32767.0);
+                            p.t = (int32_t)std::clamp<double>(t * inv, -32768.0, 32767.0);
+                        } else {
+                            p.s = s >> 16;
+                            p.t = t >> 16;
+                        }
+                    }
+                    if (m_.zPrim)  p.z = (primZ_ & 0x7FFF) << 3;
+                    else if (zbuf) p.z = std::clamp((int32_t)val[7] >> 13, 0, 0x3FFFF);
+                    else           p.z = 0;
+                    p.dz = dzPix;
+                    p.cvg = cvg;
+                    p.cvbit = cvbit;
+                    drawPixel(x, row, p, tile, tex);
+                }
+            }
+            for (int n = 0; n < 8; ++n) val[n] += attr[n][1];
         }
     }
 }

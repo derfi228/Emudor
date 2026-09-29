@@ -2,7 +2,6 @@
 #include "n64_cpu.h"
 #include "n64_system.h"
 #include "console/state_io.h"
-#include <cfenv>
 #include <cstdio>
 #include <cstdlib>
 #include <cmath>
@@ -39,6 +38,15 @@ template<> struct FBits<double> { using U = uint64_t; static constexpr U default
 
 template<class F> typename FBits<F>::U bitsOf(F v) { typename FBits<F>::U u; std::memcpy(&u, &v, sizeof u); return u; }
 template<class F> F fromBits(typename FBits<F>::U u) { F v; std::memcpy(&v, &u, sizeof v); return v; }
+
+// Режим округления и флаги исключений — прямо в MXCSR (вся арифметика x86-64 —
+// SSE). Функции fenv у MinGW трогают ещё и x87 и заметно медленнее.
+inline uint32_t readCsr() { uint32_t v; asm volatile("stmxcsr %0" : "=m"(v) :: "memory"); return v; }
+inline void writeCsr(uint32_t v) { asm volatile("ldmxcsr %0" :: "m"(v) : "memory"); }
+constexpr uint32_t CSR_RC = 0x6000;                       // поле округления
+// MIPS RM: 0 к ближайшему, 1 к нулю, 2 к +∞, 3 к −∞ → поле RC MXCSR
+constexpr uint32_t kCsrRound[4] = { 0x0000, 0x6000, 0x4000, 0x2000 };
+inline void clearFlags() { writeCsr(readCsr() & ~0x3Fu); }
 
 // Округление к ближайшему чётному без оглядки на режим хоста.
 template<class F> F roundEven(F v)
@@ -96,8 +104,8 @@ bool Vr4300::kernelMode() const
 void Vr4300::runUntil(uint64_t target)
 {
     // Режим округления FPU — у хоста на время исполнения, потом как было.
-    const int hostRounding = std::fegetround();
-    applyRounding();
+    const uint32_t hostCsr = readCsr();
+    if ((hostCsr & CSR_RC) != kCsrRound[fcr31 & 3]) applyRounding();
     runTarget_ = target;
     while (cycles_ < runTarget_) {
         step();
@@ -105,8 +113,27 @@ void Vr4300::runUntil(uint64_t target)
         const uint32_t count = (uint32_t)cop0[C0_COUNT] + CYCLES_PER_INSTR / 2;
         cop0[C0_COUNT] = count;
         if (count == (uint32_t)cop0[C0_COMPARE]) cop0[C0_CAUSE] |= 0x8000;   // IP7
+        if (idleLoop_) skipIdle();
     }
-    std::fesetround(hostRounding);
+    if ((readCsr() & CSR_RC) != (hostCsr & CSR_RC)) writeCsr((readCsr() & ~CSR_RC) | (hostCsr & CSR_RC));
+}
+
+// Пустой цикл «b .; nop» — процессор ждёт прерывания. Время до конца отрезка
+// (или до срабатывания Compare) проматывается сразу.
+void Vr4300::skipIdle()
+{
+    idleLoop_ = false;
+    const uint64_t status = cop0[C0_STATUS];
+    if ((cop0[C0_CAUSE] & status & 0xFF00) && (status & 7) == ST_IE) return;   // прерывание уже ждёт
+    if (runTarget_ <= cycles_) return;
+    uint64_t steps = (runTarget_ - cycles_) / CYCLES_PER_INSTR;
+    const uint32_t count = (uint32_t)cop0[C0_COUNT];
+    const uint32_t toCompare = (uint32_t)cop0[C0_COMPARE] - count;
+    if (toCompare != 0 && toCompare <= steps) steps = toCompare;
+    if (steps == 0) return;
+    cycles_ += steps * CYCLES_PER_INSTR;
+    cop0[C0_COUNT] = count + (uint32_t)steps;
+    if ((uint32_t)cop0[C0_COUNT] == (uint32_t)cop0[C0_COMPARE]) cop0[C0_CAUSE] |= 0x8000;
 }
 
 void Vr4300::step()
@@ -333,7 +360,12 @@ void Vr4300::execute(uint32_t instr)
         gpr[31] = curPc_ + 8;
         jumpTo((pc & ~0x0FFFFFFFull) | ((uint64_t)(instr & 0x03FFFFFF) << 2));
         break;
-    case 0x04: branch(gpr[rs] == gpr[rt], btarget, false); break;              // BEQ
+    case 0x04:                                                                 // BEQ
+        branch(gpr[rs] == gpr[rt], btarget, false);
+        if (rs == rt && btarget == curPc_ && ((uint32_t)pc & 0xC0000000u) == 0x80000000u &&
+            sys_->read32((uint32_t)pc & 0x1FFFFFFFu) == 0)
+            idleLoop_ = true;                                                  // «b .» со слотом nop
+        break;
     case 0x05: branch(gpr[rs] != gpr[rt], btarget, false); break;              // BNE
     case 0x06: branch((int64_t)gpr[rs] <= 0, btarget, false); break;           // BLEZ
     case 0x07: branch((int64_t)gpr[rs] > 0, btarget, false); break;            // BGTZ
@@ -804,8 +836,7 @@ void     Vr4300::setD(int n, double v) { setFpr64(n, bitsOf(v)); }
 
 void Vr4300::applyRounding() const
 {
-    static const int modes[4] = { FE_TONEAREST, FE_TOWARDZERO, FE_UPWARD, FE_DOWNWARD };
-    std::fesetround(modes[fcr31 & 3]);
+    writeCsr((readCsr() & ~CSR_RC) | kCsrRound[fcr31 & 3]);
 }
 
 void Vr4300::writeFcr31(uint32_t v)
@@ -846,12 +877,12 @@ template<class F> Vr4300::FpIn Vr4300::fpuCheckIn(F v)
 // выходе при FS=1 сбрасывается в ноль, иначе — «не реализовано».
 template<class F> bool Vr4300::fpuFinish(F& r)
 {
-    const int ex = std::fetestexcept(FE_ALL_EXCEPT);
+    const uint32_t ex = readCsr();                        // флаги SSE: IE DE ZE OE UE PE
     uint32_t cause = 0;
-    if (ex & FE_INEXACT)   cause |= FC_I;
-    if (ex & FE_OVERFLOW)  cause |= FC_O;
-    if (ex & FE_DIVBYZERO) cause |= FC_Z;
-    if (ex & FE_INVALID)   cause |= FC_V;
+    if (ex & 0x20) cause |= FC_I;
+    if (ex & 0x08) cause |= FC_O;
+    if (ex & 0x04) cause |= FC_Z;
+    if (ex & 0x01) cause |= FC_V;
     if (std::isnan(r)) r = fromBits<F>(FBits<F>::defaultNan);
     if (std::fpclassify(r) == FP_SUBNORMAL) {
         const bool fs = fcr31 & (1u << 24);
@@ -863,7 +894,7 @@ template<class F> bool Vr4300::fpuFinish(F& r)
         const bool toMin = (rm == 2 && !neg) || (rm == 3 && neg);
         r = toMin ? std::numeric_limits<F>::min() : F(0);
         if (neg) r = -r;
-    } else if (ex & FE_UNDERFLOW) {
+    } else if (ex & 0x10) {
         cause |= FC_U;
     }
     return !fpuTrap(cause);
@@ -876,7 +907,7 @@ template<class F> void Vr4300::fpuArith(uint32_t funct, int fd, int fs, int ft)
     const F nan = fromBits<F>(FBits<F>::defaultNan);
 
     if (funct == 0x06) { put(fd, get(fs)); return; }             // MOV — просто биты
-    std::feclearexcept(FE_ALL_EXCEPT);
+    clearFlags();
     const F a = get(fs);
     FpIn in = fpuCheckIn(a);
     if (in == FpIn::Ok && funct <= 0x03) in = fpuCheckIn(get(ft));
@@ -931,8 +962,12 @@ template<class F> void Vr4300::fpuToInt(uint32_t funct, int fd, int fs)
     if (fpuCheckIn(v) != FpIn::Ok) return;
     F r;
     if (funct >= 0x24) {                            // CVT.W / CVT.L — по режиму FCR31
-        volatile F vv = v;
-        r = std::nearbyint((F)vv);
+        switch (fcr31 & 3) {                        // явно: не зависим от режима хоста
+        case 0:  r = roundEven(v); break;
+        case 1:  r = std::trunc(v); break;
+        case 2:  r = std::ceil(v);  break;
+        default: r = std::floor(v); break;
+        }
     } else {
         switch (funct & 3) {
         case 0:  r = roundEven(v); break;           // ROUND
@@ -987,7 +1022,7 @@ void Vr4300::cop1Op(uint32_t instr)
         } else if (funct < 0x10 || funct == 0x24 || funct == 0x25) {
             if (dbl) fpuToInt<double>(funct, fd, fs); else fpuToInt<float>(funct, fd, fs);
         } else if (funct == 0x20 && dbl) {                                 // CVT.S.D
-            std::feclearexcept(FE_ALL_EXCEPT);
+            clearFlags();
             const double v = getD(fs);
             const FpIn in = fpuCheckIn(v);
             if (in == FpIn::Stop) return;
@@ -1014,7 +1049,7 @@ void Vr4300::cop1Op(uint32_t instr)
         if (funct != 0x20 && funct != 0x21) { fpuTrap(FC_E); return; }
         const int64_t v = fmt == 0x14 ? (int64_t)(int32_t)getFpr32(fs) : (int64_t)getFpr64(fs);
         if (fmt == 0x15 && (v >= (1ll << 55) || v < -(1ll << 55))) { fpuTrap(FC_E); return; }
-        std::feclearexcept(FE_ALL_EXCEPT);
+        clearFlags();
         volatile int64_t vv = v;
         if (funct == 0x20) { float r = (float)vv;  if (!fpuFinish(r)) return; setF(fd, r); }
         else               { double r = (double)vv; if (!fpuFinish(r)) return; setD(fd, r); }
