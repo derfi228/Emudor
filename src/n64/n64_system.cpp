@@ -779,6 +779,18 @@ void N64System::renderFrame()
     frameH_ = std::min(h, 1024);
     frame_.resize((size_t)frameW_ * frameH_);
 
+    // Гамма VI (VI_CTRL бит 3): выход = √вход, как у железа: 2·isqrt(i·64).
+    static const std::array<uint8_t, 256> kGamma = [] {
+        std::array<uint8_t, 256> t{};
+        for (uint32_t i = 0; i < 256; ++i) {
+            uint32_t r = 0;
+            while ((r + 1) * (r + 1) <= i * 64) ++r;
+            t[i] = (uint8_t)std::min<uint32_t>(r * 2, 255);
+        }
+        return t;
+    }();
+    const bool gamma = vi_[VI_CTRL] & 0x8;
+
     const uint32_t origin = vi_[VI_ORIGIN] & 0xFFFFFF;
     const uint32_t bpp = type == 3 ? 4 : 2;
     for (int y = 0; y < frameH_; ++y) {
@@ -793,6 +805,7 @@ void N64System::renderFrame()
                 r = (p >> 11) & 31; g = (p >> 6) & 31; b = (p >> 1) & 31;
                 r = (r << 3) | (r >> 2); g = (g << 3) | (g >> 2); b = (b << 3) | (b >> 2);
             }
+            if (gamma) { r = kGamma[r]; g = kGamma[g]; b = kGamma[b]; }
             out[x] = 0xFF000000u | (r << 16) | (g << 8) | b;
         }
     }
