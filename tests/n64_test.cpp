@@ -345,6 +345,7 @@ void runList(Rig& g, const DisplayList& dl)
     }
     g.sys->write32(0x04100000, 0x200000);
     g.sys->write32(0x04100004, 0x200000 + (uint32_t)dl.w.size() * 8);
+    g.sys->rdpFlush();                                          // RDP рисует в своём потоке
 }
 
 uint16_t pixel16(Rig& g, uint32_t base, uint32_t width, int x, int y)
@@ -373,6 +374,8 @@ TEST(N64Rdp, FillRectangleAndSyncFullInterrupt)
     EXPECT_EQ(pixel16(g, 0x100000, 64, 15, 7), 0xF801);
     EXPECT_EQ(pixel16(g, 0x100000, 64, 16, 0), 0x0000);
     EXPECT_EQ(pixel16(g, 0x100000, 64, 0, 8), 0x0000);
+    EXPECT_EQ(g.sys->read32(0x04300008) & N64System::MI_DP, 0u);   // прерывание — чуть позже
+    g.run();
     EXPECT_EQ(g.sys->read32(0x04300008) & N64System::MI_DP, N64System::MI_DP);
 }
 

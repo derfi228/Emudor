@@ -37,8 +37,77 @@ N64System::N64System()
 {
     cpu.connect(this);
     rsp.connect(this, spMem_.data());
-    rdp.connect(this, rdram_.data(), RDRAM_SIZE, spMem_.data());
+    rdp.connect(rdram_.data(), RDRAM_SIZE);
     eventAt_.fill(NEVER);
+    rdpThread_ = std::thread([this] { rdpWorker(); });
+}
+
+N64System::~N64System()
+{
+    {
+        std::lock_guard<std::mutex> lock(rdpMutex_);
+        rdpQuit_ = true;
+    }
+    rdpWork_.notify_all();
+    rdpThread_.join();
+}
+
+// ─── Поток RDP ────────────────────────────────────────────────────────────────
+void N64System::rdpWorker()
+{
+    std::unique_lock<std::mutex> lock(rdpMutex_);
+    for (;;) {
+        rdpWork_.wait(lock, [this] { return rdpQuit_ || !rdpQueue_.empty(); });
+        if (rdpQueue_.empty()) return;
+        std::vector<uint64_t> batch = std::move(rdpQueue_.front());
+        rdpQueue_.pop_front();
+        lock.unlock();
+        rdp.run(batch.data(), batch.size());
+        lock.lock();
+        ++rdpCompleted_;
+        rdpDone_.notify_all();
+    }
+}
+
+void N64System::rdpWaitFor(uint64_t batch)
+{
+    std::unique_lock<std::mutex> lock(rdpMutex_);
+    rdpDone_.wait(lock, [&] { return rdpCompleted_ >= batch; });
+}
+
+void N64System::rdpFlush()
+{
+    rdpWaitFor(rdpSubmitted_);
+}
+
+// Слова [DPC_CURRENT, DPC_END) — из RDRAM или DMEM (XBUS) — уходят в поток RDP.
+void N64System::rdpSubmit()
+{
+    const bool xbus = dpStatus_ & 1;
+    std::vector<uint64_t> batch;
+    batch.reserve((dpEnd_ - dpCurrent_) / 8);
+    bool sync = false;
+    for (uint32_t a = dpCurrent_; a < dpEnd_; a += 8) {
+        const uint8_t* p = xbus ? &spMem_[a & 0xFF8] : &rdram_[a & (RDRAM_SIZE - 8)];
+        const uint64_t w = ((uint64_t)get32(p) << 32) | get32(p + 4);
+        if (rdpCmdLeft_ == 0) {
+            const uint32_t cmd = (uint32_t)(w >> 56) & 0x3F;
+            if (cmd == 0x29) sync = true;
+            rdpCmdLeft_ = Rdp::commandLength(cmd);
+        }
+        --rdpCmdLeft_;
+        batch.push_back(w);
+    }
+    {
+        std::lock_guard<std::mutex> lock(rdpMutex_);
+        rdpQueue_.push_back(std::move(batch));
+        ++rdpSubmitted_;
+    }
+    rdpWork_.notify_one();
+    if (sync) {
+        rdpSyncs_.push_back(rdpSubmitted_);
+        if (rdpSyncs_.size() == 1) schedule(EV_DP_SYNC, RDP_SYNC_DELAY);
+    }
 }
 
 // ─── Картридж ─────────────────────────────────────────────────────────────────
@@ -120,6 +189,9 @@ bool N64System::loadSaveData(const std::vector<uint8_t>& data)
 // ─── Включение ────────────────────────────────────────────────────────────────
 void N64System::reset()
 {
+    rdpFlush();
+    rdpSyncs_.clear();
+    rdpCmdLeft_ = 0;
     std::fill(rdram_.begin(), rdram_.end(), 0);
     spMem_.fill(0);
     pifRam_.fill(0);
@@ -226,6 +298,14 @@ void N64System::handleEvent(Event e)
     case EV_AI_BUF:
         if (aiCount_ > 0) { aiFifo_[0] = aiFifo_[1]; --aiCount_; }
         if (aiCount_ > 0) aiStartBuffer();
+        break;
+    case EV_DP_SYNC:                                               // RDP дорисовал до SYNC_FULL
+        if (!rdpSyncs_.empty()) {
+            rdpWaitFor(rdpSyncs_.front());
+            rdpSyncs_.pop_front();
+            raiseMi(MI_DP);
+            if (!rdpSyncs_.empty()) schedule(EV_DP_SYNC, RDP_SYNC_DELAY);
+        }
         break;
     default: break;
     }
@@ -539,7 +619,7 @@ void N64System::spRegWrite(int reg, uint32_t v)
         // например, микрокод звука при старте задачи).
         dpEnd_ = v & 0xFFFFF8;
         if (dpEnd_ > dpCurrent_) {
-            rdp.process(dpCurrent_, dpEnd_, dpStatus_ & 1);
+            rdpSubmit();
             dpCurrent_ = dpEnd_;
         }
         break;
@@ -682,6 +762,7 @@ void N64System::viLine()
 // H/V_VIDEO и масштабов, как у настоящего VI; фильтры VI не эмулируются.
 void N64System::renderFrame()
 {
+    rdpFlush();                                                      // кадр должен быть дорисован
     const uint32_t type  = vi_[VI_CTRL] & 3;
     const uint32_t hs = (vi_[VI_H_VIDEO] >> 16) & 0x3FF, he = vi_[VI_H_VIDEO] & 0x3FF;
     const uint32_t vs = (vi_[VI_V_VIDEO] >> 16) & 0x3FF, ve = vi_[VI_V_VIDEO] & 0x3FF;
@@ -720,6 +801,7 @@ void N64System::renderFrame()
 // ─── Save state ───────────────────────────────────────────────────────────────
 template<class S> void N64System::serialize(S& s)
 {
+    rdpFlush();
     s.vec(rdram_);
     s.io(spMem_);
     s.io(pifRam_);
@@ -742,6 +824,12 @@ template<class S> void N64System::serialize(S& s)
     s.io(spMemAddr_); s.io(spDramAddr_); s.io(spMemCur_); s.io(spDramCur_); s.io(spLen_);
     s.io(spStatus_); s.io(spSemaphore_); s.io(rspDebt_);
     s.io(dpStart_); s.io(dpEnd_); s.io(dpCurrent_); s.io(dpStatus_);
+    s.io(rdpCmdLeft_);
+    uint32_t syncs = (uint32_t)rdpSyncs_.size();            // все порции уже дорисованы:
+    s.io(syncs);                                            // важно лишь, сколько прерываний ждут
+    if (S::reading) {
+        rdpSyncs_.assign(syncs, rdpSubmitted_);
+    }
     s.io(isvBuf_);
     cpu.serialize(s);
     rsp.serialize(s);

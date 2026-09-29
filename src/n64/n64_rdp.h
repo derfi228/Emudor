@@ -1,7 +1,6 @@
 #pragma once
+#include <cstddef>
 #include <cstdint>
-
-class N64System;
 
 // ─── RDP: растеризатор внутри RCP ─────────────────────────────────────────────
 // Получает список 64-битных команд (из RDRAM или, в режиме XBUS, из DMEM) и
@@ -13,22 +12,23 @@ class N64System;
 // Покрытие считается по 8 точкам на пиксель, как у железа: без сглаживания
 // пиксель рисуется, если покрыт его левый верхний угол; со сглаживанием —
 // при любом покрытии. Фильтры VI и скрытые биты покрытия RDRAM не моделируются.
+//
+// Работает в своём потоке (его ведёт N64System): получает уже скопированные
+// слова команд; прерывание по SYNC_FULL поднимает система.
 class Rdp {
 public:
-    void connect(N64System* sys, uint8_t* rdram, uint32_t rdramSize, uint8_t* dmem)
-    { sys_ = sys; rdram_ = rdram; rdramMask_ = rdramSize - 1; dmem_ = dmem; }
+    void connect(uint8_t* rdram, uint32_t rdramSize) { rdram_ = rdram; rdramMask_ = rdramSize - 1; }
     void reset();
 
-    // Выполнить команды из [start, end). xbus — список лежит в DMEM.
-    void process(uint32_t start, uint32_t end, bool xbus);
+    // Выполнить слова команд (команда может продолжиться в следующей порции).
+    void run(const uint64_t* words, size_t count);
+    static int commandLength(uint32_t cmd);                // в 64-битных словах
 
     template<class S> void serialize(S& s);
 
 private:
-    N64System* sys_ = nullptr;
     uint8_t*   rdram_ = nullptr;
     uint32_t   rdramMask_ = 0;
-    uint8_t*   dmem_ = nullptr;
 
     // Незавершённая команда (список может прерваться посреди неё)
     uint64_t cmd_[44]{};
@@ -87,7 +87,6 @@ private:
     void     combine(int cycle);
 
     // ── Команды ───────────────────────────────────────────────────────────────
-    static int  commandLength(uint32_t cmd);
     void     execute();
     void     setOtherModes(uint64_t w);
     void     triangle(uint32_t cmd);

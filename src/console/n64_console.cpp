@@ -55,7 +55,7 @@ bool N64Console::saveSram(const std::string& path) const
 
 // ─── Save state ("N64S" v1): ~8 МБ — почти всё RDRAM ─────────────────────────
 static constexpr uint32_t N64_SAVE_MAGIC   = 0x5334364Eu;   // "N64S"
-static constexpr uint32_t N64_SAVE_VERSION = 1u;
+static constexpr uint32_t N64_SAVE_VERSION = 2u;
 
 template<class S> void N64Console::serialize(S& s)
 {

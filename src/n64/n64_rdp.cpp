@@ -1,6 +1,5 @@
 // n64_rdp.cpp — RDP: команды, растеризация, TMEM, комбайнер и блендер.
 #include "n64_rdp.h"
-#include "n64_system.h"
 #include "console/state_io.h"
 #include <algorithm>
 #include <cstdio>
@@ -84,13 +83,10 @@ int Rdp::commandLength(uint32_t cmd)
     return 1;
 }
 
-void Rdp::process(uint32_t start, uint32_t end, bool xbus)
+void Rdp::run(const uint64_t* words, size_t count)
 {
-    for (uint32_t a = start; a < end; a += 8) {
-        const uint8_t* p = xbus ? dmem_ + (a & 0xFF8) : rdram_ + (a & rdramMask_ & ~7u);
-        uint64_t w = 0;
-        for (int k = 0; k < 8; ++k) w = (w << 8) | p[k];
-        cmd_[cmdLen_++] = w;
+    for (size_t i = 0; i < count; ++i) {
+        cmd_[cmdLen_++] = words[i];
         if (cmdLen_ >= commandLength((uint32_t)(cmd_[0] >> 56) & 0x3F)) {
             execute();
             cmdLen_ = 0;
@@ -115,7 +111,6 @@ void Rdp::execute()
                   (int16_t)(w1 >> 48), (int16_t)(w1 >> 32), (int16_t)(w1 >> 16), (int16_t)w1, cmd == 0x25);
         break;
     }
-    case 0x29: sys_->raiseMi(N64System::MI_DP); break;               // Sync Full
     case 0x2A:                                                       // Set Key GB
         keyCenter_[1] = (int32_t)(w >> 24) & 0xFF; keyScale_[1] = (int32_t)(w >> 16) & 0xFF;
         keyCenter_[2] = (int32_t)(w >> 8) & 0xFF;  keyScale_[2] = (int32_t)w & 0xFF;

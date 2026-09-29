@@ -3,9 +3,13 @@
 #include "n64_rsp.h"
 #include "n64_rdp.h"
 #include <array>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
+#include <deque>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 // ─── Nintendo 64: шина, регистры RCP, PIF и картридж ─────────────────────────
@@ -35,6 +39,9 @@ public:
     enum class Save : uint8_t { None, Eeprom4K, Eeprom16K, Sram };
 
     N64System();
+    ~N64System();
+    N64System(const N64System&) = delete;
+    N64System& operator=(const N64System&) = delete;
 
     // Образ .z64 (big-endian), .v64 (байты попарно) или .n64 (little-endian).
     bool loadRom(std::vector<uint8_t> data);
@@ -50,6 +57,9 @@ public:
     void     spRegWrite(int reg, uint32_t v);
     bool     spHalted() const { return spStatus_ & 1; }
     void     rspBreak();                          // BREAK: стоп и, если просили, прерывание
+
+    // Дождаться, пока поток RDP дорисует всё отправленное.
+    void     rdpFlush();
 
     // ── Картридж ─────────────────────────────────────────────────────────────
     const std::string& title() const { return title_; }
@@ -142,7 +152,7 @@ private:
     Save save_ = Save::None;
 
     // ── Расписание событий ───────────────────────────────────────────────────
-    enum Event { EV_VI_LINE, EV_PI_DMA, EV_SI_DMA, EV_AI_BUF, EV_COUNT };
+    enum Event { EV_VI_LINE, EV_PI_DMA, EV_SI_DMA, EV_AI_BUF, EV_DP_SYNC, EV_COUNT };
     static constexpr uint64_t NEVER = ~0ull;
     std::array<uint64_t, EV_COUNT> eventAt_{};
     void schedule(Event e, uint64_t delay);
@@ -209,6 +219,24 @@ private:
     void     spDma(bool toRdram, uint32_t reg);
     void     spStatusWrite(uint32_t v);
     uint32_t dpStart_ = 0, dpEnd_ = 0, dpCurrent_ = 0, dpStatus_ = 0x80;
+
+    // ── Поток RDP ────────────────────────────────────────────────────────────
+    // Порции команд копируются при записи DPC_END и рисуются в своём потоке.
+    // Прерывание SYNC_FULL приходит через RDP_SYNC_DELAY тактов после
+    // отправки — в один и тот же момент эмулируемого времени при любой
+    // скорости хоста (если поток не успел, эмуляция его подождёт).
+    static constexpr uint64_t RDP_SYNC_DELAY = 30000;
+    std::thread rdpThread_;
+    std::mutex  rdpMutex_;
+    std::condition_variable rdpWork_, rdpDone_;
+    std::deque<std::vector<uint64_t>> rdpQueue_;
+    uint64_t rdpSubmitted_ = 0, rdpCompleted_ = 0;
+    bool     rdpQuit_ = false;
+    int      rdpCmdLeft_ = 0;                 // слов до конца текущей команды (разбор SYNC_FULL)
+    std::deque<uint64_t> rdpSyncs_;           // номера порций с SYNC_FULL, ждущих прерывания
+    void     rdpSubmit();
+    void     rdpWaitFor(uint64_t batch);
+    void     rdpWorker();
 
     // ── IS-Viewer: отладочный вывод в область ПЗУ 0x13FF0000 ─────────────────
     std::array<uint8_t, 0x200> isvBuf_{};
